@@ -1,0 +1,16 @@
+# 规格 V1.4.8 第 18.1 节。
+# REQUIRED 项为 null 时，超出结构研究阶段的启动会被门禁拒绝。
+risk:
+  # REQUIRED
+  risk_per_trade_pct: null
+  max_notional_exposure: null
+  max_margin_usage_pct: null
+  leverage: null
+
+  # RESEARCH 初始值
+  fixed_stop_pct: 0.05
+  hard_risk_budget_multiple: 1.25
+  trailing_k_normal: 3.0
+  trailing_k_escalated: 2.0
+  recovery_confirm_1h_bars: 3
+  recovery_confirm_4h_bars: 2

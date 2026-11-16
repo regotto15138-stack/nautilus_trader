@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SACW V1.1.2 · 结构标注与参数校准工作台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e1117'/%3E%3Cpath d='M2 11l3-4 3 2 3-5 3 3' stroke='%23ffb74d' fill='none' stroke-width='1.6'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <h1>SACW 结构标注工作台</h1>
+    <span id="sacw-version" class="badge">V1.1.2</span>
+    <span id="spec-version" class="badge dim">V1.4.8</span>
+    <span id="instrument" class="instrument">—</span>
+    <span id="source-badge" class="badge dim">—</span>
+    <span id="dataset-badge" class="badge dim mono" title="数据集与配置哈希">—</span>
+    <span id="live-status" class="live ok" title="逐周期自服务端读取新落盘的已收盘 K 线；点击暂停或恢复">实时</span>
+  </div>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="annotate" role="tab">结构标注</button>
+    <button type="button" class="tab" data-tab="regression" role="tab">PB 回归样本</button>
+    <button type="button" class="tab" data-tab="dataset" role="tab">数据集与快照</button>
+  </nav>
+
+  <div class="controls">
+    <div class="group">
+      <span class="group-label">权限</span>
+      <span id="can-open" class="pill pill-off">CanOpen</span>
+      <span id="can-hold" class="pill pill-off">CanHold</span>
+    </div>
+    <div class="group">
+      <span class="group-label">宏观</span>
+      <span id="macro-summary" class="macro-summary">—</span>
+    </div>
+  </div>
+</header>
+
+<main id="view-annotate" class="view active">
+
+  <section class="charts">
+    <div class="tf-bar" id="timeframe-buttons"></div>
+
+    <div class="chart-head">
+      <span id="legend-ohlc" class="legend">—</span>
+      <span id="legend-ind" class="legend dim">—</span>
+      <span id="legend-zigzag" class="legend dim">—</span>
+      <span id="legend-atr" class="legend dim">—</span>
+    </div>
+
+    <div id="price-chart" class="chart price"></div>
+
+    <div class="chart-caption">
+      ATR14 副图 · <span class="tag-na">ATR_MA22 = N/A / SPEC_AMBIGUITY</span>
+      （V1.4.8 未定义该指标，不绘制、不参与决策，SACW 17.1）
+    </div>
+    <div id="atr-chart" class="chart atr"></div>
+
+    <div class="toolbar">
+      <div class="group" role="group" aria-label="图层">
+        <span class="group-label">图层</span>
+        <label><input type="checkbox" id="toggle-sma" checked /> SMA22</label>
+        <label><input type="checkbox" id="toggle-atr" checked /> ATR14</label>
+        <label><input type="checkbox" id="toggle-zigzag" checked /> ZigZag</label>
+        <label><input type="checkbox" id="toggle-candidate" checked /> 候选</label>
+        <label><input type="checkbox" id="toggle-swing" checked /> 摆动点</label>
+        <label><input type="checkbox" id="toggle-zone" checked /> Zone</label>
+        <label><input type="checkbox" id="toggle-structure" checked /> N 结构</label>
+        <label><input type="checkbox" id="toggle-levels" checked /> 保护点</label>
+      </div>
+
+      <div class="group" role="group" aria-label="标注工具">
+        <span class="group-label">标注工具</span>
+        <button type="button" class="tool active" data-tool="select">选择</button>
+        <button type="button" class="tool" data-tool="swing">Swing</button>
+        <button type="button" class="tool" data-tool="nstructure">N 结构</button>
+        <button type="button" class="tool" data-tool="zone">Zone</button>
+      </div>
+    </div>
+
+    <p id="tool-hint" class="hint">提示：选择工具后在图上点击放置对象；摆动点需要两次点击（发生 Bar → 确认 Bar）。</p>
+  </section>
+
+  <aside class="panel">
+
+    <h2>多周期状态</h2>
+    <table class="states">
+      <thead>
+        <tr><th>周期</th><th>状态</th><th>ZigZag</th><th>摆动</th><th>N 结构</th><th>Zone</th></tr>
+      </thead>
+      <tbody id="state-rows"></tbody>
+    </table>
+
+    <h2>本周期指标</h2>
+    <dl id="levels" class="stats"></dl>
+
+    <h2>ATR 快照检查器</h2>
+    <div class="snapshot-box">
+      <label class="field">
+        <span>字段</span>
+        <select id="atr-snapshot-field">
+          <option value="signal_decision_atr_15m">signal_decision_atr_15m</option>
+          <option value="execution_reference_atr_15m">execution_reference_atr_15m</option>
+          <option value="initial_stop_atr_15m">initial_stop_atr_15m</option>
+          <option value="stop_update_atr_15m">stop_update_atr_15m</option>
+        </select>
+      </label>
+      <dl id="atr-snapshot" class="stats compact"></dl>
+    </div>
+
+    <h2>Zone（本周期）</h2>
+    <ul id="zone-list" class="objects"></ul>
+
+    <h2>N 结构（本周期）</h2>
+    <p class="notice" id="n-invalidation-notice">—</p>
+    <ul id="structure-list" class="objects"></ul>
+
+    <h2>标注</h2>
+    <div class="annotation-box">
+      <p class="hint workflow-hint">
+        标注先保存为 <code>DRAFT</code>，再按 提交 → 审核 → 批准 → 冻结 推进。
+        冻结后才成为 Ground Truth，才可运行程序回放差异比较。
+      </p>
+      <div id="zone-mode-box" class="zone-box hidden">
+        <label class="field inline">
+          <span>Zone 模式</span>
+          <select id="zone-mode">
+            <option value="ANCHOR_ONLY">ANCHOR_ONLY（后端计算边界）</option>
+            <option value="HUMAN_BOUNDARY">HUMAN_BOUNDARY（人工边界）</option>
+          </select>
+        </label>
+        <div id="zone-human-fields" class="zone-human-fields hidden">
+          <label class="field inline"><span>Lower</span>
+            <input id="zone-human-lower" type="text" inputmode="decimal" />
+          </label>
+          <label class="field inline"><span>Upper</span>
+            <input id="zone-human-upper" type="text" inputmode="decimal" />
+          </label>
+          <label class="field inline"><span>Center</span>
+            <input id="zone-human-center" type="text" inputmode="decimal" />
+          </label>
+        </div>
+      </div>
+      <div id="anchor-picker" class="anchor-picker hidden">
+        <div class="picker-head">
+          <span>锚点候选（本周期已确认摆动点）</span>
+          <button type="button" id="clear-anchors" class="ghost">清空</button>
+        </div>
+        <div id="anchor-chips" class="anchor-chips"></div>
+      </div>
+      <div id="pending-annotation" class="pending hidden"></div>
+      <ul id="annotation-list" class="annotations"></ul>
+      <div class="ops">
+        <button type="button" id="refresh-annotations">刷新标注</button>
+        <button type="button" id="freeze-golden" class="ghost">冻结黄金样本（APPROVED → FROZEN）</button>
+      </div>
+      <p id="annotation-status" class="status">—</p>
+    </div>
+
+    <h2>Ground Truth 差异比较</h2>
+    <div class="annotation-box comparison-box">
+      <p class="hint">
+        只比较黄金样本冻结清单中的 FROZEN 人工标注与 V1.4.8 程序回放输出。
+        匹配结果不是对错判定，需人工复核差异报告。
+      </p>
+      <div class="ops">
+        <button type="button" id="compare-swings" disabled>Swing 差异</button>
+        <button type="button" id="compare-zones" disabled>Zone 差异</button>
+      </div>
+      <p id="comparison-status" class="status">尚未冻结黄金样本。</p>
+      <pre id="comparison-output" class="code-block">—</pre>
+    </div>
+
+    <h2>说明</h2>
+    <ul class="notes">
+      <li>七个周期共享算法、各自独立状态（规格 2.1）。</li>
+      <li>N 结构失效价在 ATR 时点裁定前不产出，标记 <code>SPEC_AMBIGUITY</code>（SACW 27.6）。</li>
+      <li>Zone 的 ANCHOR_ONLY 边界由后端 V1.4.8 公式计算，前端不得重写（SACW 21.2）。</li>
+      <li>ATR_MA22 在 V1.4.8 未定义，一律显示 <code>N/A / SPEC_AMBIGUITY</code>。</li>
+      <li>Setup / Signal / 执行 / 风控在 P1 阶段实现；当前只做结构与标注。</li>
+    </ul>
+    <p id="status-line" class="status">加载中…</p>
+  </aside>
+</main>
+
+<main id="view-regression" class="view">
+  <section class="regression-left">
+    <div class="regression-controls">
+      <input type="search" id="case-search" placeholder="搜索 PB 编号 / 标题 / 章节" />
+      <select id="case-status-filter">
+        <option value="">全部状态</option>
+        <option value="PASSED">PASSED</option>
+        <option value="FAILED">FAILED</option>
+        <option value="BLOCKED">BLOCKED</option>
+        <option value="READY">READY（未运行）</option>
+      </select>
+      <button type="button" id="run-suite">运行全套 PB-01..51</button>
+    </div>
+    <p id="suite-meta" class="suite-meta">尚未运行。</p>
+    <ul id="case-list" class="case-list"></ul>
+  </section>
+
+  <section class="regression-right">
+    <h2 id="case-title">选择一个 PB 样本</h2>
+    <dl id="case-facts" class="stats"></dl>
+    <h3>结构化预期</h3>
+    <pre id="case-expected" class="code-block">—</pre>
+    <h3>断言结果</h3>
+    <ul id="case-assertions" class="assertions"></ul>
+    <h3>运行汇总</h3>
+    <pre id="suite-summary" class="code-block">—</pre>
+  </section>
+</main>
+
+<main id="view-dataset" class="view">
+  <section class="dataset-left">
+    <h2>多周期数据覆盖</h2>
+    <table class="coverage">
+      <thead>
+        <tr><th>周期</th><th>Bar</th><th>缺失</th><th>重复</th><th>乱序</th><th>完整</th><th>起</th><th>止</th></tr>
+      </thead>
+      <tbody id="coverage-rows"></tbody>
+    </table>
+
+    <h2>数据集与配置</h2>
+    <dl id="dataset-facts" class="stats"></dl>
+
+    <h2>初始状态快照</h2>
+    <div class="ops">
+      <label class="field inline">
+        <span>周期</span>
+        <select id="snapshot-timeframe"></select>
+      </label>
+      <button type="button" id="build-snapshot">生成快照</button>
+    </div>
+    <pre id="snapshot-output" class="code-block">—</pre>
+  </section>
+
+  <section class="dataset-right">
+    <h2>黄金样本</h2>
+    <div class="ops">
+      <label class="field inline">
+        <span>切分</span>
+        <select id="golden-split">
+          <option value="CALIBRATION">CALIBRATION</option>
+          <option value="VALIDATION">VALIDATION</option>
+          <option value="HOLDOUT" selected>HOLDOUT</option>
+        </select>
+      </label>
+      <button type="button" id="freeze-golden-2">冻结黄金样本</button>
+    </div>
+    <p id="ground-truth-hash" class="status">—</p>
+    <ul id="golden-list" class="objects"></ul>
+
+    <h2>审计日志</h2>
+    <ul id="audit-list" class="audit"></ul>
+  </section>
+</main>
+
+<script src="/vendor/lightweight-charts.standalone.production.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

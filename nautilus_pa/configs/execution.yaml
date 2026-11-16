@@ -1,0 +1,14 @@
+# 规格 V1.4.8 第 14、18.1 节。
+execution:
+  # REQUIRED（同时属于 METADATA，必须记录来源与生效版本）
+  maker_fee_rate: null
+  taker_fee_rate: null
+  cost_model_version: null
+  slippage_model_version: null
+  instrument_metadata_version: null
+
+  # RESEARCH 初始值
+  max_execution_deviation_atr: 0.5
+  max_execution_gap_atr: 0.5
+  max_actual_fill_deviation_atr: 0.75
+  min_trigger_swing_atr: 0.3

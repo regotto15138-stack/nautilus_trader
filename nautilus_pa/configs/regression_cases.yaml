@@ -1,0 +1,523 @@
+# PB-01 至 PB-51 回归样本（SACW V1.1.2 第 23 章）。
+# 由规格 V1.4.8 第 7.3 节表格逐条生成；expected_absent_* 为结构化负向断言。
+# status 取值：
+#   NOW      —— 本阶段可执行（依赖已实现的结构/配置层）。
+#   P1       —— 依赖尚未实现的 Setup/Signal/执行/风险引擎。
+#   BLOCKED_SPEC —— N 结构失效 ATR 时点未定义（SACW 27.6）。
+cases:
+  - case_id: PB-01
+    case_version: 1
+    title: "PullbackLow 高于当前 15M NStructure.L2"
+    expected: "允许继续识别回撤延续"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-02
+    case_version: 1
+    title: "PullbackLow 等于 NStructure.L2"
+    expected: "拒绝"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: ["SIGNAL_CREATED"]
+    negative_assertion_reason: "PullbackLow 等于 L2 时必须拒绝，不得创建 PULLBACK_CONTINUATION Signal。"
+    negative_spec_section: "11.5"
+  - case_id: PB-03
+    case_version: 1
+    title: "PullbackLow 低于 NStructure.L2"
+    expected: "当前回撤候选失效"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-04
+    case_version: 1
+    title: "PullbackLow 后出现多个 SwingHigh"
+    expected: "选择第一个满足确认时序的 SwingHigh"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-05
+    case_version: 1
+    title: "TriggerSwing 确认后出现更高 SwingHigh"
+    expected: "不替换 TriggerSwing"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-06
+    case_version: 1
+    title: "PullbackLow 更新为更低但仍高于 L2 的低点"
+    expected: "原 TriggerSwingHigh 与 HigherLow 全部作废并重新等待；新 HigherLow 必须晚于新 TriggerSwingHigh 确认"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-07
+    case_version: 1
+    title: "PullbackLow 跌破或等于 NStructure.L2"
+    expected: "回撤候选失效"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: ["SIGNAL_CREATED"]
+    negative_assertion_reason: "PullbackLow 跌破或等于 L2 时回撤候选失效，不得创建 Signal。"
+    negative_spec_section: "11.5"
+  - case_id: PB-08
+    case_version: 1
+    title: "实际成交偏差超过阈值"
+    expected: "记录 FILL_DEVIATION_BREACH"
+    spec_section: "12.8"
+    category: "成交偏差控制"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-09
+    case_version: 1
+    title: "成交偏差超限且存在剩余入场数量"
+    expected: "取消剩余入场订单"
+    spec_section: "12.8"
+    category: "成交偏差控制"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-10
+    case_version: 1
+    title: "成交偏差超限但实际风险未超预算"
+    expected: "管理已有仓位，不强制平仓"
+    spec_section: "12.8"
+    category: "成交偏差控制"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-11
+    case_version: 1
+    title: "成交偏差超限且实际风险超预算"
+    expected: "进入 ACTUAL_RISK_BUDGET_BREACH"
+    spec_section: "16.2"
+    category: "风险升级"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-12
+    case_version: 1
+    title: "N 结构跌破参数化缓冲"
+    expected: "N 结构失效"
+    spec_section: "5.5"
+    category: "N 结构失效"
+    stage: BLOCKED_SPEC
+    status: BLOCKED_BY_SPEC_AMBIGUITY
+    blocked_reason: "V1.4.8 5.5 未定义失效判定使用的 ATR 时点（SACW 27.6 / UI-020）。"
+    expected_absent_events: []
+  - case_id: PB-13
+    case_version: 1
+    title: "修改 n_structure_break_buffer_atr"
+    expected: "失效结果随参数变化"
+    spec_section: "5.5"
+    category: "N 结构失效"
+    stage: BLOCKED_SPEC
+    status: BLOCKED_BY_SPEC_AMBIGUITY
+    blocked_reason: "V1.4.8 5.5 未定义失效判定使用的 ATR 时点（SACW 27.6 / UI-020）。"
+    expected_absent_events: []
+  - case_id: PB-14
+    case_version: 1
+    title: "Signal 创建时 3M SwingLow 正在形成"
+    expected: "不参与执行确认"
+    spec_section: "12.3"
+    category: "3M 执行确认时序"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-15
+    case_version: 1
+    title: "Signal 创建后才开始形成 3M SwingLow"
+    expected: "满足其余条件时可参与执行确认"
+    spec_section: "12.3"
+    category: "3M 执行确认时序"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-16
+    case_version: 1
+    title: "12:07 入场，12:00–12:15 15M Bar"
+    expected: "不参与移动止损最高价统计"
+    spec_section: "16.1"
+    category: "移动止损"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-17
+    case_version: 1
+    title: "部分成交后更新保护性止损"
+    expected: "StopQuantity 等于 PositionQuantity"
+    spec_section: "15.2"
+    category: "部分成交止损"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-18
+    case_version: 1
+    title: "连续 3 根 1H Bar 均为 BULLISH"
+    expected: "满足 1H 恢复计数"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-19
+    case_version: 1
+    title: "恢复计数期间出现非 BULLISH 状态"
+    expected: "计数重置"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-20
+    case_version: 1
+    title: "风险恢复后候选止损低于当前止损"
+    expected: "忽略，不下移"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-21
+    case_version: 1
+    title: "ProtectedHigh 新候选与旧值相等"
+    expected: "保留旧 ProtectedHigh ID"
+    spec_section: "5.3"
+    category: "ProtectedHigh"
+    stage: NOW
+    status: READY
+    expected_absent_events: []
+  - case_id: PB-22
+    case_version: 1
+    title: "ProtectedHigh 失效"
+    expected: "各周期按映射表进入 UNKNOWN/TRANSITION"
+    spec_section: "5.3"
+    category: "ProtectedHigh"
+    stage: NOW
+    status: READY
+    expected_absent_events: []
+  - case_id: PB-23
+    case_version: 1
+    title: "PullbackLow 位于观察区内，HigherLow 略高于观察区上沿"
+    expected: "位置校验通过；HigherLow 只校验高于 PullbackLow 与 L2"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-24
+    case_version: 1
+    title: "PullbackLow 更新后仍高于 L2，旧 HigherLow 已存在"
+    expected: "旧 TriggerSwingHigh 与 HigherLow 全部清空；新 HigherLow 确认时间必须晚于新 TriggerSwingHigh 确认时间"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-25
+    case_version: 1
+    title: "TriggerSwingHigh 相对 PullbackLow 的反弹幅度低于 0.3 ATR"
+    expected: "不得选为 TriggerSwingHigh，继续等待满足阈值的后续 SwingHigh"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: ["TRIGGER_SWING_SELECTED"]
+    negative_assertion_reason: "反弹幅度低于 0.3 ATR 的 SwingHigh 不得被选为 TriggerSwingHigh。"
+    negative_spec_section: "11.5"
+  - case_id: PB-26
+    case_version: 1
+    title: "TriggerSwingHigh 相对 PullbackLow 的反弹幅度恰好达到最小阈值"
+    expected: "满足幅度边界，若时序条件成立则可选为 TriggerSwingHigh"
+    spec_section: "11.5"
+    category: "15M 回撤延续"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-27
+    case_version: 1
+    title: "1H 连续 2 根 BULLISH 后第 3 根为 PULLBACK"
+    expected: "1H 恢复计数归零，不得解除风险升级"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: ["RISK_ESCALATION_CLEARED"]
+    negative_assertion_reason: "1H 恢复计数被非 BULLISH 打断后不得解除风险升级。"
+    negative_spec_section: "16.3"
+  - case_id: PB-28
+    case_version: 1
+    title: "4H 仅连续 1 根 TREND_UP，其他恢复条件满足"
+    expected: "不得解除风险升级"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: ["RISK_ESCALATION_CLEARED"]
+    negative_assertion_reason: "4H 仅连续 1 根 TREND_UP 时不得解除风险升级。"
+    negative_spec_section: "16.3"
+  - case_id: PB-29
+    case_version: 1
+    title: "4H 连续 2 根 TREND_UP，且其他恢复条件满足"
+    expected: "4H 恢复计数通过；仍须满足全部其他恢复条件"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-30
+    case_version: 1
+    title: "4H 连续 1 根 TREND_UP 后出现非 TREND_UP"
+    expected: "4H 恢复计数归零"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-31
+    case_version: 1
+    title: "Signal 创建前已发生、创建后才确认的 3M SwingLow"
+    expected: "不得用于本次执行确认"
+    spec_section: "12.3"
+    category: "3M 执行确认时序"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-32
+    case_version: 1
+    title: "ACTIVE Signal 尚未成交"
+    expected: "`partially_filled = False`"
+    spec_section: "11.7"
+    category: "Signal 状态机"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-33
+    case_version: 1
+    title: "ACTIVE Signal 已部分成交且剩余订单仍有效"
+    expected: "状态仍为 ACTIVE，`partially_filled = True`"
+    spec_section: "11.7"
+    category: "Signal 状态机"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-34
+    case_version: 1
+    title: "Zone Min Anchors 配置为 1"
+    expected: "启动门禁以配置非法拒绝"
+    spec_section: "6.5"
+    category: "启动门禁"
+    stage: NOW
+    status: READY
+    expected_absent_events: []
+  - case_id: PB-35
+    case_version: 1
+    title: "4H/1H 研究 N 结构失效，但对应周期状态机条件未触发失效"
+    expected: "不得直接改变 Setup、Signal 或持仓状态"
+    spec_section: "5.5"
+    category: "研究结构隔离"
+    stage: NOW
+    status: READY
+    expected_absent_events: ["N_STRUCTURE_INVALIDATED"]
+    negative_assertion_reason: "4H/1H 的 RESEARCH_ONLY N 结构不得产生交易性失效事件。"
+    negative_spec_section: "5.5"
+  - case_id: PB-36
+    case_version: 1
+    title: "Signal 已部分成交，随后超时且剩余订单终止"
+    expected: "进入 PARTIALLY_EXECUTED；原因记录为 TIMEOUT，不得进入 EXPIRED"
+    spec_section: "11.7"
+    category: "Signal 状态机"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-37
+    case_version: 1
+    title: "Signal 已部分成交，随后结构/上下文/宏观权限失效或 FILL_DEVIATION_BREACH"
+    expected: "进入 PARTIALLY_EXECUTED；具体原因写入 remaining_order_terminal_reason"
+    spec_section: "11.7"
+    category: "Signal 状态机"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-38
+    case_version: 1
+    title: "Signal 零成交后超时/结构失效"
+    expected: "分别进入 EXPIRED/CANCELLED；仅适用于 filled_quantity = 0"
+    spec_section: "11.7"
+    category: "Signal 状态机"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-39
+    case_version: 1
+    title: "回放中 ATR 更新，已保存的回撤起点/TriggerSwing/Signal 决策快照"
+    expected: "历史判定不被后续 ATR 改写；同输入回放结果一致"
+    spec_section: "11.6"
+    category: "ATR 快照"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-40
+    case_version: 1
+    title: "execution_reference_atr_15m 缺失、非有限数或小于等于 0"
+    expected: "记录 INVALID_ATR，不计算偏差倍数，撤销剩余订单并进入风险异常流程"
+    spec_section: "12.8"
+    category: "ATR 快照"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-41
+    case_version: 1
+    title: "风险预算减仓，CurrentRiskPerUnit 含退出成本但不含已发生入场费"
+    expected: "减仓量按 CurrentRiskPerUnit 计算，不重复计入沉没入场成本"
+    spec_section: "17"
+    category: "仓位与风险"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-42
+    case_version: 1
+    title: "首次成交后 InitialStop 高于或等于 ActualAverageEntryPrice / CurrentExecutablePrice"
+    expected: "不提交无效保护止损；取消剩余入场订单并进入紧急退出/RISK_ANOMALY"
+    spec_section: "15.1"
+    category: "止损与可执行价格"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-43
+    case_version: 1
+    title: "尚未生效的 StopCandidate 在下一合格 3M Open 已被触及"
+    expected: "按紧急市价退出及不利滑点处理，不套用 15.5 已生效止损单模型，不使用该 Bar Low"
+    spec_section: "15.5"
+    category: "止损成交模型"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-44
+    case_version: 1
+    title: "风险升级触发所在 1H/4H Bar 同时满足恢复状态"
+    expected: "升级触发 Bar 不计入恢复计数；从升级后的下一根完整 Bar 起算"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-45
+    case_version: 1
+    title: "1H 恢复计数连续 2 根 BULLISH 后第 3 根非 BULLISH"
+    expected: "1H 计数立即归零；后续必须重新累计完整 3 根"
+    spec_section: "16.3"
+    category: "风险恢复计数"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-46
+    case_version: 1
+    title: "同一订单出现多笔 Fill，其中一笔单笔不利偏差超限但累计均价未超限"
+    expected: "FillRecord 保留各笔数据，订单级最大单笔偏差仍触发 FILL_DEVIATION_BREACH"
+    spec_section: "12.8"
+    category: "成交偏差控制"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-47
+    case_version: 1
+    title: "Zone 可信快照只含边界/中心/锚点数量，缺少全部锚点 confirmed_at"
+    expected: "判定快照不可信，SnapshotStatus = INSUFFICIENT_HISTORY"
+    spec_section: "21.2"
+    category: "Zone 快照可信度"
+    stage: NOW
+    status: READY
+    expected_absent_events: []
+  - case_id: PB-48
+    case_version: 1
+    title: "CanOpen = False，但 CanHold = True 且无强制退出条件"
+    expected: "已有持仓可满足风险恢复权限；禁止新开仓，不自动强平"
+    spec_section: "8.5"
+    category: "CanOpen / CanHold"
+    stage: NOW
+    status: READY
+    expected_absent_events: []
+  - case_id: PB-49
+    case_version: 1
+    title: "同一 Signal 的 signal_decision_atr_15m 与 execution_reference_atr_15m"
+    expected: "必须来自同一根已完成 15M Bar 且数值相等；pullback_start/trigger_swing ATR 保留各自事件快照"
+    spec_section: "11.6"
+    category: "ATR 快照"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-50
+    case_version: 1
+    title: "首笔成交后 ATR 更新，后续部分成交或移动止损更新"
+    expected: "initial_stop_atr_15m 保持不变；每次止损更新单独记录 stop_update_atr_15m"
+    spec_section: "15.3"
+    category: "止损更新"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []
+  - case_id: PB-51
+    case_version: 1
+    title: "风险减仓时 CurrentExecutablePrice 已触及或低于 CurrentStopPrice"
+    expected: "不执行公式减仓，进入止损/紧急退出流程；CurrentRiskPerUnit 不得按零风险处理"
+    spec_section: "17"
+    category: "仓位与风险"
+    stage: P1
+    status: BLOCKED_BY_UNIMPLEMENTED_STAGE
+    blocked_reason: "依赖 P1-A/P1-B 的 Setup/Signal/执行/风险引擎，本阶段只登记样本与断言结构。"
+    expected_absent_events: []

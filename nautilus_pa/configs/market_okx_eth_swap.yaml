@@ -1,0 +1,20 @@
+# Spec V1.3.1 section 14.3 (FROZEN).
+# `leverage` stays null until the execution phases are implemented; the startup
+# gate rejects a null leverage outside the structure-only research phase.
+market:
+  venue: OKX
+  instrument_id: ETH-USDT-SWAP.OKX
+  instrument_type: SWAP
+  settlement_currency: USDT
+  margin_mode: ISOLATED
+  leverage: null
+
+  # METADATA（规格第 18.2 节）：必须记录来源与生效版本。
+  # tick_size 参与 Zone 半宽下限项 min_half_width_ticks * tick_size（第 6.4 节）。
+  metadata:
+    version: "okx-eth-usdt-swap-2024-01"
+    tick_size: 0.01
+    lot_size: 1
+    min_quantity: 1
+    max_quantity: 1000000
+    contract_multiplier: 0.01

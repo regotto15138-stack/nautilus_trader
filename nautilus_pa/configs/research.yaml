@@ -1,0 +1,12 @@
+# 规格 V1.4.8 第 3.1、18.1 节。
+research:
+  # 全部内部时间使用 UTC（第 3.1 节）。
+  data_timezone: UTC
+
+  # 交易所会话边界相对 UTC 的偏移小时数。
+  # 实测 OKX 的日/周/月/4H/1H 等 K 线均在 UTC+8 零点开盘，故取 8。
+  # 取 0 表示严格执行规格的 UTC 口径（OKX 数据会被全部拒绝）。
+  session_offset_hours: 8
+
+  # REQUIRED：回测区间必须被该 Funding 数据集覆盖。
+  funding_dataset: null

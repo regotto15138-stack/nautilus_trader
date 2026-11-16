@@ -1,0 +1,64 @@
+# 规格 V1.4.8 第 2.1、4、19 章。
+strategy:
+  name: eth_multi_tf_trend
+  version: 1.4.8
+  direction: LONG_ONLY
+  allow_short: false
+  allow_reverse: false
+  allow_pyramiding: false
+
+# 七个周期角色固定，不允许互换（规格第 2.1 节）。
+timeframes:
+  macro: 1-MONTH
+  mid: 1-WEEK
+  short: 1-DAY
+  setup: 4-HOUR
+  reversal: 1-HOUR
+  signal: 15-MINUTE
+  execution: 3-MINUTE
+
+# FIXED：SMA 22、Wilder ATR 14（规格第 4.1 节）。
+indicators:
+  ma_type: SMA
+  ma_period: 22
+  atr_type: WILDER
+  atr_period: 14
+  # ATR_MA22 在 V1.4.8 第 4.1 节中不存在（SACW V1.1.2 第 17.1 节），
+  # 因此不提供配置项、不做计算；UI 显示 N/A / SPEC_AMBIGUITY。
+
+# RESEARCH：初始研究值，运行时必须记录实际生效值。
+zigzag:
+  method: ATR_REVERSAL
+  reversal_atr_multiple: 2.0
+  confirmation_price: CLOSE
+
+protected:
+  break_buffer_atr: 0.1
+
+# 规格第 6 章与第 19 章：Zone 聚类、几何与状态机。
+# min_anchor_count 为 FIXED 规则（第 6.5 节），不得小于 2。
+zone:
+  min_anchor_count: 2
+  merge_distance_atr: 0.5
+  max_cluster_width_atr: 1.0
+  half_width_atr: 0.1
+  # V1.1.2 补入 SACW 8.1 白名单：影响 half_width 的最小 tick 项。
+  min_half_width_ticks: 2
+  test_tolerance_atr: 0.1
+  break_buffer_atr: 0.1
+  # V1.1.2 补入 SACW 8.1 白名单：锚点年龄上限（周）。
+  max_age_weeks: 52
+
+n_structure:
+  break_buffer_atr: 0.1
+  # FIXED：交易性 N 结构失效判定仅适用于 15M（规格第 5.5 节）。
+  trading_timeframe: 15M
+
+pullback:
+  min_atr_1d: 0.5
+  min_atr_4h: 0.5
+  min_atr_1h: 0.3
+  min_atr_15m: 0.3
+
+range:
+  boundary_tolerance_atr: 0.5

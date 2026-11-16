@@ -1,0 +1,25 @@
+# 本地工具环境（Playwright 等），不入版本控制
+.tools/
+# 浏览器截图产物
+chart-check*.png
+
+# Python 缓存与构建产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 本地数据库临时文件（WAL/SHM 由 SQLite 运行时生成）
+*.sqlite3-wal
+*.sqlite3-shm
+
+# 采集到的行情数据（Parquet）按约定纳入版本控制。
+# 父仓库根目录的 .gitignore 有全局 `*.parquet` 规则，这里显式取回。
+!catalog/**/*.parquet
