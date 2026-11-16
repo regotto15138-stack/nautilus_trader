@@ -71,7 +71,7 @@ nautilus_pa/
 │   └── presentation/               # 图表载荷 + HTTP API 路由
 ├── web/                            # Lightweight Charts 工作台（库内置，无需联网）
 ├── scripts/                        # 采集、校验、研究、服务、浏览器自检
-├── tests/                          # 单元 + 集成（327 项）
+├── tests/                          # 单元 + 集成（333 项）
 └── var/                            # SACW SQLite（gitignore）
 ```
 
@@ -81,7 +81,7 @@ nautilus_pa/
 cd nautilus_pa
 VENV=/home/regotto/Code/nautilus_trader/python/.venv/bin/python
 
-PYTHONPATH=src $VENV -m pytest -q        # 327 passed
+PYTHONPATH=src $VENV -m pytest -q        # 333 passed
 PYTHONPATH=src $VENV -m ruff check .     # All checks passed
 ```
 
@@ -107,9 +107,9 @@ PYTHONPATH=src $VENV scripts/serve_chart.py      # http://127.0.0.1:8787/
 
 | 页签 | 内容 |
 | --- | --- |
-| 结构标注 | 七周期 K 线 + 成交量 + SMA22 + ATR14 副图；ZigZag 候选与反转阈值；Zone 边界；N 结构；保护点；Swing / N 结构 / Zone 标注工具；Swing `HUMAN_JUDGED`；Zone `ANCHOR_ONLY` / `HUMAN_BOUNDARY`；ATR 快照检查器；冻结 Ground Truth 后的差异比较 |
+| 结构标注 | 七周期 K 线 + 成交量 + SMA22 + ATR14 副图；ZigZag 候选与反转阈值；Zone 边界；N 结构；保护点；Swing / N 结构 / Zone / 保护点 / 状态区间标注工具；Swing `HUMAN_JUDGED`；Zone `ANCHOR_ONLY` / `HUMAN_BOUNDARY`；人工标注图层；ATR 快照检查器；冻结 Ground Truth 后的 Swing/Zone/N 差异比较与程序回放 |
 | PB 回归样本 | PB-01..51 列表与过滤、单例/全套运行、结构化断言与阻塞原因、run_id 与哈希绑定 |
-| 数据集与快照 | 七周期覆盖与完整性、数据集/配置哈希、初始状态快照、黄金样本冻结与 baseline replay 绑定、审计日志 |
+| 数据集与快照 | 七周期覆盖与完整性、数据集/配置哈希、初始状态快照与 artifact、黄金样本冻结与 baseline replay 绑定、审计日志 |
 
 ### REST API（`/api/v1`）
 
@@ -124,10 +124,19 @@ GET/POST /annotation-projects               GET/POST /annotation-projects/{id}/a
 GET/PATCH /annotations/{id}                 POST /annotations/{id}/status
 POST /annotations/{id}/{submit|review|approve|freeze}
 GET  /annotations/{id}/revisions            GET  /audit-logs
+DELETE /annotations/{id}
 POST /annotation-projects/{id}/comparisons/swings?timeframe=&golden_dataset_id=
 POST /annotation-projects/{id}/comparisons/zones?timeframe=&golden_dataset_id=
+POST /annotation-projects/{id}/comparisons/n-structures?timeframe=&golden_dataset_id=
+POST /annotation-projects/{id}/comparisons/state-intervals?timeframe=&golden_dataset_id=
+GET  /comparisons[/{id}]
+POST /replay-runs                           GET  /replay-runs[/{id}][/events][/snapshots]
+POST /replay-runs/{id}/cancel
 GET/POST /boundary-overrides                POST /boundary-overrides/{id}/review
-GET/POST /golden-datasets                    GET  /snapshots
+GET/POST /golden-datasets                    GET  /golden-datasets/{id}
+POST /golden-datasets/{id}/validate          POST /golden-datasets/{id}/split
+GET  /market/datasets/{id}/splits
+GET  /snapshots                              GET/POST /snapshots/artifacts
 GET  /regression-cases[/{id}]               POST /regression-cases/{id}/runs
 POST /regression-suites/v1-4-8/run          GET  /regression-runs[/{id}][/assertions]
 ```
@@ -152,6 +161,8 @@ POST /regression-suites/v1-4-8/run          GET  /regression-runs[/{id}][/assert
   该周期最新叠加层（摆动点、N 结构、Zone、保护点），前端增量追加；
 - 单个周期新增超过 `maxLiveBars`（500）根时返回 `reload: true`，前端改为整页
   重载，不在浏览器里拼接过长历史；
+- 整页每周期只带最近 `MAX_SERIES_BARS`（1200）根，更早历史由前端把视野拖到最左侧时
+  通过 `GET /market/bars?to=&limit=` 分页前插；
 - 没有新数据时只返回状态，载荷可以忽略。
 
 页面顶栏的实时徽章显示最近一次更新时刻与追加根数，点击可暂停/恢复轮询。
@@ -173,8 +184,13 @@ POST /regression-suites/v1-4-8/run          GET  /regression-runs[/{id}][/assert
 - **重启补数**：启动时以未收盘缺口为基准续采——窗口从「最后一根已存 K 线的下一期」
   往前回退 `RESUME_LOOKBACK_PERIODS`（3 期），因此停机期间产生的 K 线在下一次
   启动时**全部**补齐，而不是只回退固定两期。
+- **历史前向扩展**：启动时比较第一根已存 K 线与目标回补深度，缺多少向前补多少。
+  因此调大回补天数后**无需删库**即可让已有目录获得更长历史。
 - **历史缺口修复**：启动时扫描已存时间戳，逐段请求中间的缺口。续采只从最后一根
   往后补，早先运行遗留的中间缺口靠这一步修复。
+- **回补深度**（`DEFAULT_BOOTSTRAP_DAYS`）：1M/1W/1D 六年（覆盖合约上线）：
+  4H 三年、1H 一年、15M 90 天、3M 30 天。分钟级不取全量，因为 3M 六年约 108 万根、
+  需要上万次分页请求。
 - **收盘补拉**：每个周期在自己的收盘时刻后补拉一次历史 K 线，覆盖 WebSocket
   漏推。
 - **断线重连**：只在收到显式 `DISCONNECTED` → `CONNECTED` 后重新回补

@@ -64,6 +64,9 @@ def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHa
         def do_PATCH(self) -> None:
             self._dispatch("PATCH")
 
+        def do_DELETE(self) -> None:
+            self._dispatch("DELETE")
+
         def _dispatch(self, method: str) -> None:
             path, query = route_path(self.path)
             if not path.startswith("/api/"):

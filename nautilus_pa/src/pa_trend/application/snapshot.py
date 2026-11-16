@@ -1,8 +1,8 @@
 """初始状态快照（SACW 21.2、21.3、24）。
 
 快照把某一时刻的指标、ZigZag、SwingPoint、N 结构与 Zone 固化成可比较的
-JSON，并给出可信度状态。本阶段只包含底层结构：1M/1W/1D/4H/1H 状态机字段
-留空（``state_machines = null``），持仓与订单也留空，等 P1 阶段再补。
+JSON，并给出可信度状态。本阶段包含底层结构与已实现的 1M/1W/1D/4H/1H 状态机；
+持仓与订单仍留空，等 P2 阶段再补。
 
 可信度规则（SACW 21.2、PB-47）：
 
@@ -76,6 +76,30 @@ def _decimal_text(value: Decimal | None) -> str | None:
 
 def _valid_atr(value: Decimal | None) -> bool:
     return value is not None and value.is_finite() and value > 0
+
+
+def _state_machines(context: MarketContext) -> dict[str, Any]:
+    """把已实现的周期状态机写入快照（SACW 21.3）。
+
+    15M/3M 没有独立趋势状态机，``state`` 为 ``None`` 时保持 null，不伪造状态。
+    """
+    market = context.snapshot()
+    states = {
+        timeframe.value: market.per_timeframe[timeframe].state
+        for timeframe in Timeframe
+    }
+    return {
+        "states": states,
+        "macro": {
+            "1M": market.month.value,
+            "1W": market.week.value,
+            "1D": market.day.value,
+            "4H": market.h4.value,
+            "1H": market.h1.value,
+        },
+        "canOpen": market.can_open,
+        "canHold": market.can_hold,
+    }
 
 
 def _zone_payload(zone: Zone) -> dict[str, Any]:
@@ -213,14 +237,14 @@ def build_snapshot(
             for structure in engine.structures.structures
         ],
         "zones": [_zone_payload(zone) for zone in zones],
-        # P1-A 之前状态机字段留空，避免把未验证规则写进快照。
-        "state_machines": None,
+        "state_machines": _state_machines(context),
         "position": None,
         "orders": None,
         "notes": [
-            "1M/1W/1D/4H/1H 状态机字段在 P1-A 前保持 null（SACW 21.3）。",
+            "1M/1W/1D/4H/1H 状态机按当前已回放上下文写入（SACW 21.3）。",
             "ATR_MA22 为 SPEC_AMBIGUITY，不写入快照数值（SACW 17.1）。",
             "N 结构失效价在 ATR 时点裁定前保持 null（SACW 27.6）。",
+            "持仓与订单在 P2 前保持 null，不伪造。",
         ],
     }
 

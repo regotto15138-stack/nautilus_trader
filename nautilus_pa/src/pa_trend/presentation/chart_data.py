@@ -186,22 +186,26 @@ def candidate_markers(updates: Sequence[TimeframeUpdate]) -> list[dict[str, obje
 
 
 def candidate_series(updates: Sequence[TimeframeUpdate]) -> list[dict[str, object]]:
-    """按 Bar 逐点导出候选状态，供十字光标提示使用（SACW 17.3）。"""
+    """导出带候选极值的 Bar，供十字光标提示使用（SACW 17.3）。
+
+    只输出存在候选的行：没有候选的 Bar 查询结果本就是“无候选”，逐 Bar 输出
+    一整行空值会让载荷随历史长度线性膨胀（5000 根时约 1.5 MB/周期）。
+    """
     points: list[dict[str, object]] = []
     for update in updates:
         candidate = update.zigzag_candidate
+        if candidate is None:
+            continue
         points.append(
             {
                 "time": ns_to_chart_time(update.bar.ts_open_ns),
                 "direction": update.zigzag_direction,
-                "candidateId": None if candidate is None else candidate.candidate_id,
-                "price": None if candidate is None else float(candidate.price),
-                "atrSnapshot": None if candidate is None else float(candidate.atr_snapshot),
-                "reversalThreshold": (
-                    None if candidate is None else float(candidate.reversal_threshold_price)
-                ),
-                "candidateBarId": None if candidate is None else candidate.bar_id,
-                "status": None if candidate is None else candidate.status,
+                "candidateId": candidate.candidate_id,
+                "price": float(candidate.price),
+                "atrSnapshot": float(candidate.atr_snapshot),
+                "reversalThreshold": float(candidate.reversal_threshold_price),
+                "candidateBarId": candidate.bar_id,
+                "status": candidate.status,
             },
         )
     return points
@@ -211,10 +215,29 @@ def structure_overlays(
     structures: Sequence[NStructure],
     *,
     invalidation_status: str,
+    visible_from: int | None = None,
+    visible_to: int | None = None,
 ) -> list[dict[str, object]]:
-    """构造最近若干条 N 结构的叠加数据。"""
+    """构造是近若干条 N 结构的叠加数据。
+
+    ``visible_from`` / ``visible_to`` 是图表实际下发的秒级时间范围。完全落在
+    范围之外的结构在图上没有对应蜡烛，Lightweight Charts 会把它们压到最左/最右
+    边缘画出一条孤立的短线（视觉“错断”），因此剔除；跨越边界的结构（L1 早于
+    窗口起点、H2 仍在窗口内）是真实可见的，必须保留。
+    """
     ordered = sorted(
-        structures,
+        (
+            item
+            for item in structures
+            if _overlaps_window(
+                (
+                    ns_to_chart_time(item.l1.occurred_at_ns),
+                    ns_to_chart_time(item.h2.occurred_at_ns),
+                ),
+                visible_from,
+                visible_to,
+            )
+        ),
         key=lambda item: (item.status.value != "ACTIVE", item.confirmed_at_ns),
     )
     selected = sorted(
@@ -265,6 +288,18 @@ def structure_overlays(
             },
         )
     return overlays
+
+
+def _overlaps_window(
+    span: tuple[int, int],
+    visible_from: int | None,
+    visible_to: int | None,
+) -> bool:
+    """判断 ``span``（起止秒级时刻）与图表下发的时间范围是否相交。"""
+    start, end = span
+    if visible_to is not None and start > visible_to:
+        return False
+    return not (visible_from is not None and end < visible_from)
 
 
 def _segment(start: int, end: int, value: Decimal) -> list[dict[str, float | int]]:
@@ -329,8 +364,29 @@ def zone_overlay(zone: Zone, *, end_time: int) -> dict[str, object]:
     }
 
 
-def zone_overlays(zones: Sequence[Zone], *, last_time: int) -> list[dict[str, object]]:
-    """挑选需要绘制的 Zone：最近若干未关闭者 + 最近若干终态者。"""
+def zone_overlays(
+    zones: Sequence[Zone],
+    *,
+    last_time: int,
+    first_time: int | None = None,
+) -> list[dict[str, object]]:
+    """挑选需要绘制的 Zone：最近若干未关闭者 + 最近若干终态者。
+
+    与 N 结构同理：完全落在图表时间范围之前的 Zone 不画，否则会贴着左边缘
+    拉出与蜡烛无关的竖线。
+    """
+    zones = [
+        zone
+        for zone in zones
+        if _overlaps_window(
+            (
+                ns_to_chart_time(zone.created_at_ns),
+                ns_to_chart_time(zone.updated_at_ns),
+            ),
+            first_time,
+            last_time,
+        )
+    ]
     open_zones = [zone for zone in zones if zone.is_open][-MAX_OPEN_ZONES:]
     closed_zones = [zone for zone in zones if zone.is_terminal][-MAX_CLOSED_ZONES:]
     selected = sorted([*closed_zones, *open_zones], key=lambda zone: zone.created_at_ns)
@@ -396,6 +452,7 @@ def build_timeframe_section(
     """构造单个周期的图表数据段。"""
     bars = [update.bar for update in updates]
     swings = [update.swing_point for update in updates if update.swing_point is not None]
+    first_time = ns_to_chart_time(bars[0].ts_open_ns) if bars else None
     last_time = ns_to_chart_time(bars[-1].ts_close_ns) if bars else 0
 
     return {
@@ -413,8 +470,10 @@ def build_timeframe_section(
         "structures": structure_overlays(
             structures,
             invalidation_status=view.n_structure_invalidation_status,
+            visible_from=first_time,
+            visible_to=last_time,
         ),
-        "zones": zone_overlays(zones, last_time=last_time),
+        "zones": zone_overlays(zones, last_time=last_time, first_time=first_time),
         "zoneEvents": zone_events_payload(updates),
         "levelLines": level_lines(view),
         "state": view.state,

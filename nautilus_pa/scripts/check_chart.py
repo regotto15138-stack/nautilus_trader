@@ -123,6 +123,22 @@ def main(argv: list[str] | None = None) -> int:
             })""",
         )
 
+        # 侧栏页签：标注 / 结构 / 比对 必须能切换。
+        panel_tabs = {}
+        for name in ("structure", "compare", "annotate"):
+            page.click(f'.panel-tab[data-panel="{name}"]')
+            page.wait_for_timeout(120)
+            panel_tabs[name] = page.evaluate(
+                """(name) => ({
+                  active: document.getElementById('panel-' + name)
+                    .classList.contains('active'),
+                  visible: document.getElementById('panel-' + name)
+                    .getBoundingClientRect().height > 0,
+                })""",
+                name,
+            )
+        report["panelTabs"] = panel_tabs
+
         # 全页截图（结构标注页签）
         page.screenshot(path=str(args.output), full_page=False)
 
@@ -310,6 +326,10 @@ def main(argv: list[str] | None = None) -> int:
             "十字光标移动时图表高度不稳定（会闪烁）："
             f"图例区 {sorted(head_heights)}，主图 {sorted(chart_heights)}"
         )
+
+    panel_tabs = report.get("panelTabs") or {}
+    if any(not item.get("active") or not item.get("visible") for item in panel_tabs.values()):
+        errors.append(f"侧栏页签切换异常: {panel_tabs}")
 
     report["url"] = args.url
     report["screenshot"] = str(args.output.resolve())

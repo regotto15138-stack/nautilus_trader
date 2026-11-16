@@ -62,7 +62,7 @@
 
     <div class="toolbar">
       <div class="group" role="group" aria-label="图层">
-        <span class="group-label">图层</span>
+        <span class="group-label" title="仅控制图表显示，不进入标注流程">显示图层（仅显隐）</span>
         <label><input type="checkbox" id="toggle-sma" checked /> SMA22</label>
         <label><input type="checkbox" id="toggle-atr" checked /> ATR14</label>
         <label><input type="checkbox" id="toggle-zigzag" checked /> ZigZag</label>
@@ -71,21 +71,122 @@
         <label><input type="checkbox" id="toggle-zone" checked /> Zone</label>
         <label><input type="checkbox" id="toggle-structure" checked /> N 结构</label>
         <label><input type="checkbox" id="toggle-levels" checked /> 保护点</label>
+        <label><input type="checkbox" id="toggle-manual" checked /> 人工标注</label>
+      </div>
+
+      <div class="group" role="group" aria-label="视图">
+        <span class="group-label" title="时间轴与价格轴自适应">视图</span>
+        <button type="button" class="view-btn" id="view-reset" title="重置为自适应视图（双击图表或按 R）">自适应</button>
+        <button type="button" class="view-btn" id="view-fit" title="显示已加载的全部 K 线">全部</button>
       </div>
 
       <div class="group" role="group" aria-label="标注工具">
-        <span class="group-label">标注工具</span>
+        <span class="group-label">标注工具（先选工具）</span>
+        <span id="current-tool" class="badge dim">当前：选择</span>
         <button type="button" class="tool active" data-tool="select">选择</button>
         <button type="button" class="tool" data-tool="swing">Swing</button>
         <button type="button" class="tool" data-tool="nstructure">N 结构</button>
         <button type="button" class="tool" data-tool="zone">Zone</button>
+        <button type="button" class="tool" data-tool="protected">保护点</button>
+        <button type="button" class="tool" data-tool="state">状态区间</button>
+        <label class="field inline hidden" id="n-structure-status-box">
+          <span>N 状态</span>
+          <select id="n-structure-status">
+            <option value="ACTIVE">ACTIVE</option>
+            <option value="CONFIRMED">CONFIRMED</option>
+            <option value="INVALIDATED">INVALIDATED</option>
+            <option value="EXPIRED">EXPIRED</option>
+          </select>
+        </label>
+        <label class="field inline hidden" id="protected-event-box">
+          <span>保护点事件</span>
+          <select id="protected-event-type">
+            <option value="INIT">INIT</option>
+            <option value="UPDATE">UPDATE</option>
+            <option value="INVALIDATE">INVALIDATE</option>
+          </select>
+        </label>
+        <label class="field inline hidden" id="state-interval-box">
+          <span>区间状态</span>
+          <select id="state-interval-state"></select>
+        </label>
       </div>
     </div>
 
-    <p id="tool-hint" class="hint">提示：选择工具后在图上点击放置对象；摆动点需要两次点击（发生 Bar → 确认 Bar）。</p>
+    <p id="tool-hint" class="hint">提示：图层的勾选只控制显示；要标注请先在「标注工具」中选择 Swing / N 结构 / Zone / 保护点 / 状态区间，再点击图表。Swing 需要两次点击（发生 Bar → 确认 Bar）。</p>
   </section>
 
   <aside class="panel">
+      <div class="panel-tabs" role="tablist" aria-label="侧栏视图">
+        <button type="button" class="panel-tab active" data-panel="annotate">标注</button>
+        <button type="button" class="panel-tab" data-panel="structure">结构</button>
+        <button type="button" class="panel-tab" data-panel="compare">比对</button>
+      </div>
+      <div id="panel-annotate" class="panel-view active">
+    <div class="annotation-box">
+      <p class="hint workflow-hint">
+        标注先保存为 <code>DRAFT</code>，再按 提交 → 审核 → 批准 → 冻结 推进。
+        冻结后才成为 Ground Truth，才可运行程序回放差异比较。
+      </p>
+      <details class="usage">
+        <summary>使用说明 · 连续标注</summary>
+        <ol>
+          <li>选择周期，再在「标注工具」中选择 <b>Swing</b>、<b>N 结构</b>、<b>Zone</b>、<b>保护点</b> 或 <b>状态区间</b>。图层复选框只控制显示，不进入标注。</li>
+          <li><b>Swing</b>：点击发生 Bar，再点击确认 Bar；价格默认取该 Bar 的 High/Low。</li>
+          <li><b>N 结构</b>：依次选择 L1 → H1 → L2 → H2 四个已确认摆动点。</li>
+          <li><b>Zone</b>：选择至少两个同向摆动点；ANCHOR_ONLY 由后端算边界，HUMAN_BOUNDARY 填写人工 Lower/Upper/Center。</li>
+          <li><b>保护点</b>：点击 Bar，选择 INIT / UPDATE / INVALIDATE；15M 独立 ProtectedLow 会被拒绝。</li>
+          <li><b>状态区间</b>：选择状态后点击开始 Bar 和结束 Bar；保存 valid_from / valid_to / known_at。</li>
+          <li>点击待提交面板的「<b>保存草稿</b>」入库为 <code>DRAFT</code>；保存后可继续标注下一个。</li>
+          <li>已保存标注显示在「人工标注」图层；可删除未冻结标注或导出 JSON。</li>
+          <li>需要参与比对时，再把标注推进到 APPROVED，并点击「冻结黄金样本」；只有冻结后的 Ground Truth 才进入 Swing / Zone / N 结构差异比较与程序回放。</li>
+        </ol>
+      </details>
+      <label class="field inline continuous-mode">
+        <input type="checkbox" id="continuous-annotation" checked />
+        <span>保存后继续标注（保持当前工具）</span>
+      </label>
+      <p id="annotation-summary" class="summary-line">项目标注：—</p>
+      <div id="zone-mode-box" class="zone-box hidden">
+        <label class="field inline">
+          <span>Zone 模式</span>
+          <select id="zone-mode">
+            <option value="ANCHOR_ONLY">ANCHOR_ONLY（后端计算边界）</option>
+            <option value="HUMAN_BOUNDARY">HUMAN_BOUNDARY（人工边界）</option>
+          </select>
+        </label>
+        <div id="zone-human-fields" class="zone-human-fields hidden">
+          <label class="field inline"><span>Lower</span>
+            <input id="zone-human-lower" type="text" inputmode="decimal" />
+          </label>
+          <label class="field inline"><span>Upper</span>
+            <input id="zone-human-upper" type="text" inputmode="decimal" />
+          </label>
+          <label class="field inline"><span>Center</span>
+            <input id="zone-human-center" type="text" inputmode="decimal" />
+          </label>
+        </div>
+      </div>
+      <div id="anchor-picker" class="anchor-picker hidden">
+        <div class="picker-head">
+          <span>锚点候选（本周期已确认摆动点）</span>
+          <button type="button" id="clear-anchors" class="ghost">清空</button>
+        </div>
+        <div id="anchor-chips" class="anchor-chips"></div>
+      </div>
+      <div id="pending-annotation" class="pending hidden"></div>
+      <ul id="annotation-list" class="annotations"></ul>
+      <div class="ops">
+        <button type="button" id="refresh-annotations">刷新标注</button>
+        <button type="button" id="export-annotations" class="ghost">导出标注 JSON</button>
+        <button type="button" id="freeze-golden" class="ghost">冻结黄金样本（APPROVED → FROZEN）</button>
+      </div>
+      <p id="annotation-status" class="status">—</p>
+    </div>
+
+          </div>
+      <div id="panel-structure" class="panel-view">
+
 
     <h2>多周期状态</h2>
     <table class="states">
@@ -119,49 +220,9 @@
     <p class="notice" id="n-invalidation-notice">—</p>
     <ul id="structure-list" class="objects"></ul>
 
-    <h2>标注</h2>
-    <div class="annotation-box">
-      <p class="hint workflow-hint">
-        标注先保存为 <code>DRAFT</code>，再按 提交 → 审核 → 批准 → 冻结 推进。
-        冻结后才成为 Ground Truth，才可运行程序回放差异比较。
-      </p>
-      <div id="zone-mode-box" class="zone-box hidden">
-        <label class="field inline">
-          <span>Zone 模式</span>
-          <select id="zone-mode">
-            <option value="ANCHOR_ONLY">ANCHOR_ONLY（后端计算边界）</option>
-            <option value="HUMAN_BOUNDARY">HUMAN_BOUNDARY（人工边界）</option>
-          </select>
-        </label>
-        <div id="zone-human-fields" class="zone-human-fields hidden">
-          <label class="field inline"><span>Lower</span>
-            <input id="zone-human-lower" type="text" inputmode="decimal" />
-          </label>
-          <label class="field inline"><span>Upper</span>
-            <input id="zone-human-upper" type="text" inputmode="decimal" />
-          </label>
-          <label class="field inline"><span>Center</span>
-            <input id="zone-human-center" type="text" inputmode="decimal" />
-          </label>
-        </div>
-      </div>
-      <div id="anchor-picker" class="anchor-picker hidden">
-        <div class="picker-head">
-          <span>锚点候选（本周期已确认摆动点）</span>
-          <button type="button" id="clear-anchors" class="ghost">清空</button>
-        </div>
-        <div id="anchor-chips" class="anchor-chips"></div>
-      </div>
-      <div id="pending-annotation" class="pending hidden"></div>
-      <ul id="annotation-list" class="annotations"></ul>
-      <div class="ops">
-        <button type="button" id="refresh-annotations">刷新标注</button>
-        <button type="button" id="freeze-golden" class="ghost">冻结黄金样本（APPROVED → FROZEN）</button>
-      </div>
-      <p id="annotation-status" class="status">—</p>
-    </div>
-
-    <h2>Ground Truth 差异比较</h2>
+          </div>
+      <div id="panel-compare" class="panel-view">
+<h2>Ground Truth 差异比较</h2>
     <div class="annotation-box comparison-box">
       <p class="hint">
         只比较黄金样本冻结清单中的 FROZEN 人工标注与 V1.4.8 程序回放输出。
@@ -170,9 +231,22 @@
       <div class="ops">
         <button type="button" id="compare-swings" disabled>Swing 差异</button>
         <button type="button" id="compare-zones" disabled>Zone 差异</button>
+        <button type="button" id="compare-n-structures" disabled>N 结构差异</button>
+        <button type="button" id="compare-state-intervals" disabled>状态区间差异</button>
       </div>
       <p id="comparison-status" class="status">尚未冻结黄金样本。</p>
       <pre id="comparison-output" class="code-block">—</pre>
+    </div>
+
+    <h2>程序回放</h2>
+    <div class="annotation-box">
+      <p class="hint">使用最新冻结黄金样本的 baseline 绑定，回放 V1.4.8 结构事件并持久化，供差异比较追溯。</p>
+      <div class="ops">
+        <button type="button" id="run-replay">运行程序回放</button>
+        <button type="button" id="refresh-replay" class="ghost">刷新回放列表</button>
+      </div>
+      <p id="replay-status" class="status">尚未运行。</p>
+      <pre id="replay-output" class="code-block">—</pre>
     </div>
 
     <h2>说明</h2>
@@ -183,8 +257,9 @@
       <li>ATR_MA22 在 V1.4.8 未定义，一律显示 <code>N/A / SPEC_AMBIGUITY</code>。</li>
       <li>Setup / Signal / 执行 / 风控在 P1 阶段实现；当前只做结构与标注。</li>
     </ul>
-    <p id="status-line" class="status">加载中…</p>
-  </aside>
+          </div>
+      <p id="status-line" class="status global-status">加载中…</p>
+    </aside>
 </main>
 
 <main id="view-regression" class="view">
@@ -210,6 +285,9 @@
     <h3>结构化预期</h3>
     <pre id="case-expected" class="code-block">—</pre>
     <h3>断言结果</h3>
+    <div class="ops">
+      <button type="button" id="run-case">运行当前样本</button>
+    </div>
     <ul id="case-assertions" class="assertions"></ul>
     <h3>运行汇总</h3>
     <pre id="suite-summary" class="code-block">—</pre>
@@ -236,8 +314,11 @@
         <select id="snapshot-timeframe"></select>
       </label>
       <button type="button" id="build-snapshot">生成快照</button>
+      <button type="button" id="save-snapshot" class="ghost">保存快照</button>
     </div>
     <pre id="snapshot-output" class="code-block">—</pre>
+    <h3>已保存快照</h3>
+    <ul id="snapshot-artifacts" class="objects"></ul>
   </section>
 
   <section class="dataset-right">

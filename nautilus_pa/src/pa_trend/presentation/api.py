@@ -26,7 +26,7 @@ import json
 import re
 import traceback
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from decimal import Decimal
 from http import HTTPStatus
 from pathlib import Path
@@ -40,9 +40,12 @@ from pa_trend.application.annotation_store import (
     StoreError,
 )
 from pa_trend.application.data_service import DataService
+from pa_trend.application.market_context import MarketContext
 from pa_trend.application.matching import (
     MatcherConfig,
     SwingCandidate,
+    match_n_structures,
+    match_state_intervals,
     match_swings,
     match_zones,
 )
@@ -52,9 +55,19 @@ from pa_trend.config.validation import Stage, validate_startup
 from pa_trend.domain.errors import ConfigurationError, PaTrendError
 from pa_trend.domain.models.bar import Bar
 from pa_trend.domain.models.timeframe import Timeframe, expected_close_ns
+from pa_trend.domain.state.enums import DayState, H1State, H4State, MonthState, WeekState
 
 JSON = dict[str, Any]
 Route = tuple[str, re.Pattern[str], Callable[..., Any]]
+
+#: 允许人工标注的状态枚举（SACW 3.4E）。
+_STATE_INTERVAL_STATES: dict[str, set[str]] = {
+    Timeframe.MONTH.value: {item.value for item in MonthState},
+    Timeframe.WEEK.value: {item.value for item in WeekState},
+    Timeframe.DAY.value: {item.value for item in DayState},
+    Timeframe.HOUR4.value: {item.value for item in H4State},
+    Timeframe.HOUR1.value: {item.value for item in H1State},
+}
 
 
 class HandlerLike(Protocol):
@@ -170,9 +183,26 @@ class ApiRouter:
             r"/api/v1/annotation-projects/(?P<project_id>[\w\-]+)/comparisons/zones",
             self.compare_zones,
         )
+        add(
+            "POST",
+            r"/api/v1/annotation-projects/(?P<project_id>[\w\-]+)/comparisons/n-structures",
+            self.compare_n_structures,
+        )
+        add(
+            "POST",
+            r"/api/v1/annotation-projects/(?P<project_id>[\w\-]+)/comparisons/state-intervals",
+            self.compare_state_intervals,
+        )
+        add("GET", r"/api/v1/comparisons", self.list_comparisons)
+        add(
+            "GET",
+            r"/api/v1/comparisons/(?P<comparison_id>[\w\-]+)",
+            self.get_comparison,
+        )
 
         add("GET", r"/api/v1/annotations/(?P<annotation_id>[\w\-]+)", self.get_annotation)
         add("PATCH", r"/api/v1/annotations/(?P<annotation_id>[\w\-]+)", self.revise_annotation)
+        add("DELETE", r"/api/v1/annotations/(?P<annotation_id>[\w\-]+)", self.delete_annotation)
         add(
             "POST",
             r"/api/v1/annotations/(?P<annotation_id>[\w\-]+)/status",
@@ -201,8 +231,49 @@ class ApiRouter:
 
         add("GET", r"/api/v1/golden-datasets", self.list_golden)
         add("POST", r"/api/v1/golden-datasets", self.freeze_golden)
+        add(
+            "GET",
+            r"/api/v1/golden-datasets/(?P<golden_dataset_id>[\w\-]+)",
+            self.get_golden,
+        )
+        add(
+            "POST",
+            r"/api/v1/golden-datasets/(?P<golden_dataset_id>[\w\-]+)/validate",
+            self.validate_golden,
+        )
+        add(
+            "POST",
+            r"/api/v1/golden-datasets/(?P<golden_dataset_id>[\w\-]+)/split",
+            self.split_golden,
+        )
+        add(
+            "GET",
+            r"/api/v1/market/datasets/(?P<dataset_id>[\w\-]+)/splits",
+            self.list_dataset_splits,
+        )
 
         add("GET", r"/api/v1/snapshots", self.build_snapshot_view)
+        add("GET", r"/api/v1/snapshots/artifacts", self.list_snapshot_artifacts)
+        add("POST", r"/api/v1/snapshots/artifacts", self.save_snapshot_artifact)
+
+        add("POST", r"/api/v1/replay-runs", self.create_replay_run)
+        add("GET", r"/api/v1/replay-runs", self.list_replay_runs)
+        add("GET", r"/api/v1/replay-runs/(?P<run_id>[\w\-]+)", self.get_replay_run)
+        add(
+            "GET",
+            r"/api/v1/replay-runs/(?P<run_id>[\w\-]+)/events",
+            self.list_replay_events,
+        )
+        add(
+            "GET",
+            r"/api/v1/replay-runs/(?P<run_id>[\w\-]+)/snapshots",
+            self.list_replay_snapshots,
+        )
+        add(
+            "POST",
+            r"/api/v1/replay-runs/(?P<run_id>[\w\-]+)/cancel",
+            self.cancel_replay_run,
+        )
 
         add("GET", r"/api/v1/regression-cases", self.list_regression_cases)
         add("GET", r"/api/v1/regression-cases/(?P<case_id>[\w\-]+)", self.get_regression_case)
@@ -377,8 +448,14 @@ class ApiRouter:
             end_ns = _iso_to_ns(end) if "-" in end else int(end)
             selected = [bar for bar in selected if bar.ts_open_ns < end_ns]
 
-        window = selected[cursor : cursor + limit]
-        next_cursor = cursor + limit if cursor + limit < len(selected) else None
+        # 分页锚点：带 ``to`` 时返回紧邻该时刻之前的最后一页，供前端“向左加载”
+        # 逐页回溯；``cursor`` 始终是相对该锚点的偏移。此前一律从最早一根开始
+        # 截取，导致第二页与第一页之间跳过整段历史（图表上表现为一年以上的错断）。
+        anchor = self._bars_page_anchor(selected, limit=limit, from_end=bool(end))
+        window = selected[anchor + cursor : anchor + cursor + limit]
+        next_cursor = (
+            anchor + cursor + limit if anchor + cursor + limit < len(selected) else None
+        )
         return {
             "timeframe": timeframe.value,
             "bars": [_bar_payload(bar, self.service.source) for bar in window],
@@ -386,6 +463,17 @@ class ApiRouter:
             "datasetId": self.service.dataset_info().dataset_id,
             "dataHash": self.service.dataset_info().data_hash,
         }
+
+    @staticmethod
+    def _bars_page_anchor(selected: Sequence[Bar], *, limit: int, from_end: bool) -> int:
+        """返回本次分页的起点下标。
+
+        带 ``to``（``from_end`` 为真）时取「末尾一页」的起点，使返回的窗口恰好
+        紧邻 ``to`` 之前；否则从最早一根开始。
+        """
+        if not from_end or not selected:
+            return 0
+        return max(0, len(selected) - limit)
 
     def market_datasets(self, **_: object) -> JSON:
         """返回数据集列表（当前只有一个活动数据集）。"""
@@ -509,6 +597,21 @@ class ApiRouter:
                 "15M has no independent ProtectedLow; reference the valid NStructure.L2",
             )
 
+        if entity_type == "STATE_INTERVAL":
+            allowed_states = _STATE_INTERVAL_STATES.get(timeframe.value)
+            if not allowed_states:
+                raise ApiError(
+                    "STATE_INTERVAL_TIMEFRAME_NOT_ALLOWED",
+                    "STATE_INTERVAL is defined only for 1M/1W/1D/4H/1H",
+                )
+            state = str(payload.get("state") or "").upper()
+            if state not in allowed_states:
+                raise ApiError(
+                    "INVALID_STATE_VALUE",
+                    f"{timeframe.value} state must be one of {sorted(allowed_states)}",
+                )
+            payload["state"] = state
+
         if entity_type == "ZONE":
             mode = str(payload.get("annotation_mode") or "ANCHOR_ONLY").upper()
             payload["annotation_mode"] = mode
@@ -589,12 +692,43 @@ class ApiRouter:
                 "PROTECTED_POINT_15M_NOT_ALLOWED",
                 "15M has no independent ProtectedLow; reference the valid NStructure.L2",
             )
+        if existing["entity_type"] == "STATE_INTERVAL":
+            allowed_states = _STATE_INTERVAL_STATES.get(existing["timeframe"])
+            state = str(payload.get("state") or "").upper()
+            if not allowed_states or state not in allowed_states:
+                raise ApiError(
+                    "INVALID_STATE_VALUE",
+                    f"{existing['timeframe']} state is not valid for STATE_INTERVAL",
+                )
+            payload["state"] = state
+        expected_revision = body.get("expected_revision")
+        if expected_revision is not None:
+            try:
+                expected = int(expected_revision)
+            except (TypeError, ValueError) as exc:
+                raise ApiError("INVALID_REVISION", "expected_revision must be an integer") from exc
+            if int(existing["revision"]) != expected:
+                raise ApiError(
+                    "REVISION_CONFLICT",
+                    f"expected revision {expected}, current {existing['revision']}",
+                    HTTPStatus.CONFLICT,
+                )
         return self.store.revise_annotation(
             annotation_id=params["annotation_id"],
             payload=payload,
             actor=str(body.get("actor") or "web"),
             reason=str(body.get("reason") or "revised from web workbench"),
+            expected_revision=None if expected_revision is None else expected,
         )
+
+    def delete_annotation(self, *, body: JSON, params: JSON, **_: object) -> JSON:
+        """软删除标注；FROZEN 标注拒绝删除。"""
+        self.store.soft_delete_annotation(
+            annotation_id=params["annotation_id"],
+            actor=str(body.get("actor") or "web"),
+            reason=str(body.get("reason") or "deleted from web workbench"),
+        )
+        return {"annotation_id": params["annotation_id"], "deleted": True}
 
     def set_annotation_status(self, *, body: JSON, params: JSON, **_: object) -> JSON:
         """迁移标注状态。"""
@@ -698,6 +832,7 @@ class ApiRouter:
         entity_type: str,
         timeframe: str,
         golden: JSON,
+        required: bool = True,
     ) -> list[JSON]:
         """只读取黄金样本冻结清单中的 APPROVED/FROZEN 人工标注。"""
         golden_ids = set(self.store.list_golden_annotation_ids(str(golden["golden_dataset_id"])))
@@ -712,7 +847,7 @@ class ApiRouter:
             and row["status"] in GROUND_TRUTH_STATUSES
             and row["label_source"] in GROUND_TRUTH_SOURCES
         ]
-        if not rows:
+        if required and not rows:
             raise ApiError(
                 "EMPTY_GROUND_TRUTH",
                 "no frozen human annotations for this object type/timeframe",
@@ -758,6 +893,29 @@ class ApiRouter:
                 "MATCHED / HUMAN_ONLY / PROGRAM_ONLY / AMBIGUOUS_MATCH 均需人工解释。"
             ),
         }
+
+    def _persist_comparison(
+        self,
+        *,
+        golden: JSON,
+        replay_run_id: str,
+        report: JSON,
+        matches: list[JSON],
+    ) -> JSON:
+        summary = {
+            key: value
+            for key, value in report.items()
+            if key not in {"matches", "results"}
+        }
+        saved = self.store.save_comparison_run(
+            golden_dataset_id=str(golden["golden_dataset_id"]),
+            replay_run_id=replay_run_id,
+            matcher_version=str(report.get("matcher_version") or ""),
+            summary=summary,
+            matches=matches,
+        )
+        report["comparisonId"] = saved["comparison_id"]
+        return report
 
     def compare_swings(self, *, query: dict[str, list[str]], params: JSON, **_: object) -> JSON:
         """把冻结 Ground Truth 的 SWING_POINT 与程序 SwingPoint 做一对一匹配。"""
@@ -813,7 +971,12 @@ class ApiRouter:
         ).as_dict()
         report.update(self._comparison_meta(golden, rows))
         report["replayRunId"] = replay_run_id
-        return report
+        return self._persist_comparison(
+            golden=golden,
+            replay_run_id=replay_run_id,
+            report=report,
+            matches=list(report.get("matches") or []),
+        )
 
     def compare_zones(self, *, query: dict[str, list[str]], params: JSON, **_: object) -> JSON:
         """把冻结 Ground Truth 的 Zone 与程序 Zone 做锚点匹配。"""
@@ -834,7 +997,237 @@ class ApiRouter:
         report = match_zones(human, program)
         report.update(self._comparison_meta(golden, rows))
         report["replayRunId"] = replay_run_id
-        return report
+        return self._persist_comparison(
+            golden=golden,
+            replay_run_id=replay_run_id,
+            report=report,
+            matches=list(report.get("results") or []),
+        )
+
+    def compare_n_structures(
+        self,
+        *,
+        query: dict[str, list[str]],
+        params: JSON,
+        **_: object,
+    ) -> JSON:
+        """把冻结 Ground Truth 的 N 结构按四锚点映射与程序结构匹配。"""
+        timeframe = _parse_timeframe(_first(query, "timeframe"))
+        golden = self._frozen_golden_dataset(
+            params["project_id"],
+            _first(query, "golden_dataset_id"),
+        )
+        replay_run_id = self._comparison_baseline(golden)
+        rows = self._ground_truth_rows(
+            params["project_id"],
+            entity_type="N_STRUCTURE",
+            timeframe=timeframe.value,
+            golden=golden,
+        )
+        # 先用冻结的人工 Swing 与程序 Swing 建立映射；N 结构匹配要求
+        # 四个锚点全部映射到同一程序摆动点。
+        swing_rows = self._ground_truth_rows(
+            params["project_id"],
+            entity_type="SWING_POINT",
+            timeframe=timeframe.value,
+            golden=golden,
+            required=False,
+        )
+        human_swings = [
+            SwingCandidate(
+                swing_id=row["annotation_id"],
+                timeframe=timeframe.value,
+                direction=str(row["payload"].get("direction")),
+                price=_dec(row["payload"].get("price")),
+                occurred_at_ns=_iso_to_ns(str(row["payload"]["occurred_at"])),
+                confirmed_at_ns=_iso_to_ns(str(row["payload"]["confirmed_at"])),
+            )
+            for row in swing_rows
+        ]
+        program_swings = [
+            SwingCandidate(
+                swing_id=point.point_id,
+                timeframe=timeframe.value,
+                direction=point.direction.value,
+                price=point.price,
+                occurred_at_ns=point.occurred_at_ns,
+                confirmed_at_ns=point.confirmed_at_ns,
+                atr_snapshot=point.atr_snapshot,
+            )
+            for point in self.service.swings(timeframe)
+        ]
+        engine = self.service.context.engine(timeframe)
+        swing_report = match_swings(
+            human_swings,
+            program_swings,
+            timeframe_duration_ns=_timeframe_duration_ns(timeframe),
+            reference_atr=engine.atr.value,
+            config=MatcherConfig(),
+        )
+        mapping = {
+            str(match.human_id): str(match.program_id)
+            for match in swing_report.matches
+            if match.human_id is not None and match.program_id is not None
+        }
+        human = []
+        for row in rows:
+            payload = row["payload"]
+            human.append(
+                {
+                    "structure_id": row["annotation_id"],
+                    "l1": payload.get("l1_swing_id"),
+                    "h1": payload.get("h1_swing_id"),
+                    "l2": payload.get("l2_swing_id"),
+                    "h2": payload.get("h2_swing_id"),
+                    "confirmed_at_ns": _iso_to_ns(str(payload["confirmed_at"])),
+                    "status": "CONFIRMED"
+                    if payload.get("validation_status", "VALID") == "VALID"
+                    else str(payload.get("validation_status")),
+                },
+            )
+        program = [
+            {
+                "structure_id": structure.n_structure_id,
+                "l1": structure.l1.point_id,
+                "h1": structure.h1.point_id,
+                "l2": structure.l2.point_id,
+                "h2": structure.h2.point_id,
+                "confirmed_at_ns": structure.confirmed_at_ns,
+                "status": structure.status.value,
+            }
+            for structure in engine.structures.structures
+        ]
+        report = match_n_structures(
+            human,
+            program,
+            swing_mapping=mapping,
+            config=MatcherConfig(),
+            timeframe_duration_ns=_timeframe_duration_ns(timeframe),
+        )
+        report.update(self._comparison_meta(golden, rows))
+        report["replayRunId"] = replay_run_id
+        return self._persist_comparison(
+            golden=golden,
+            replay_run_id=replay_run_id,
+            report=report,
+            matches=list(report.get("results") or []),
+        )
+
+    def _program_state_intervals(self, timeframe: Timeframe) -> list[JSON]:
+        """重放单周期 Bar，输出状态区间历史（SACW 7.5）。"""
+        bars = self.service.bars(timeframe)
+        if not bars:
+            return []
+        context = MarketContext(self.service.config)
+        intervals: list[JSON] = []
+        current_state: str | None = None
+        start_ns: int | None = None
+        last_bar = bars[-1]
+        for bar in bars:
+            context.on_bar(bar)
+            state = context.engine(timeframe).state
+            if state is None:
+                continue
+            name = str(state)
+            if current_state is None:
+                current_state = name
+                start_ns = bar.ts_open_ns
+                continue
+            if name != current_state and start_ns is not None:
+                intervals.append(
+                    {
+                        "interval_id": f"STATE-{timeframe.value}-{start_ns}-{current_state}",
+                        "state": current_state,
+                        "valid_from_ns": start_ns,
+                        "valid_to_ns": bar.ts_open_ns,
+                        "known_at_ns": bar.ts_close_ns,
+                    },
+                )
+                current_state = name
+                start_ns = bar.ts_open_ns
+        if current_state is not None and start_ns is not None:
+            intervals.append(
+                {
+                    "interval_id": f"STATE-{timeframe.value}-{start_ns}-{current_state}",
+                    "state": current_state,
+                    "valid_from_ns": start_ns,
+                    "valid_to_ns": last_bar.ts_close_ns,
+                    "known_at_ns": last_bar.ts_close_ns,
+                },
+            )
+        return intervals
+
+    def compare_state_intervals(
+        self,
+        *,
+        query: dict[str, list[str]],
+        params: JSON,
+        **_: object,
+    ) -> JSON:
+        """比较冻结的人工状态区间与程序状态区间（SACW 7.5 基础版）。"""
+        timeframe = _parse_timeframe(_first(query, "timeframe"))
+        if timeframe.value not in _STATE_INTERVAL_STATES:
+            raise ApiError(
+                "STATE_INTERVAL_TIMEFRAME_NOT_ALLOWED",
+                "state interval comparison is defined only for 1M/1W/1D/4H/1H",
+            )
+        golden = self._frozen_golden_dataset(
+            params["project_id"],
+            _first(query, "golden_dataset_id"),
+        )
+        replay_run_id = self._comparison_baseline(golden)
+        rows = self._ground_truth_rows(
+            params["project_id"],
+            entity_type="STATE_INTERVAL",
+            timeframe=timeframe.value,
+            golden=golden,
+        )
+        human: list[JSON] = []
+        for row in rows:
+            payload = row["payload"]
+            if not payload.get("valid_to"):
+                continue
+            human.append(
+                {
+                    "interval_id": row["annotation_id"],
+                    "state": str(payload["state"]),
+                    "valid_from_ns": _iso_to_ns(str(payload["valid_from"])),
+                    "valid_to_ns": _iso_to_ns(str(payload["valid_to"])),
+                    "known_at_ns": _iso_to_ns(str(payload["known_at"])),
+                },
+            )
+        if not human:
+            raise ApiError(
+                "EMPTY_GROUND_TRUTH",
+                "frozen STATE_INTERVAL annotations need valid_to",
+                HTTPStatus.CONFLICT,
+            )
+        program = self._program_state_intervals(timeframe)
+        report = match_state_intervals(human, program)
+        report.update(self._comparison_meta(golden, rows))
+        report["replayRunId"] = replay_run_id
+        return self._persist_comparison(
+            golden=golden,
+            replay_run_id=replay_run_id,
+            report=report,
+            matches=list(report.get("results") or []),
+        )
+
+    def list_comparisons(self, **_: object) -> JSON:
+        """列出已持久化的比较运行。"""
+        items = self.store.list_comparison_runs()
+        return {"comparisons": items, "count": len(items)}
+
+    def get_comparison(self, *, params: JSON, **_: object) -> JSON:
+        """读取一次比较及其逐项匹配结果。"""
+        item = self.store.get_comparison_run(params["comparison_id"])
+        if item is None:
+            raise ApiError(
+                "UNKNOWN_COMPARISON",
+                f"unknown comparison: {params['comparison_id']}",
+                HTTPStatus.NOT_FOUND,
+            )
+        return item
 
     # ------------------------------------------------------- 边界覆盖与黄金
 
@@ -901,6 +1294,87 @@ class ApiRouter:
             baseline_config_hash=self.service.config_hash,
         )
 
+    def get_golden(self, *, params: JSON, **_: object) -> JSON:
+        """读取黄金样本。"""
+        golden = self.store.get_golden_dataset(params["golden_dataset_id"])
+        if golden is None:
+            raise ApiError(
+                "UNKNOWN_GOLDEN_DATASET",
+                f"unknown golden dataset: {params['golden_dataset_id']}",
+                HTTPStatus.NOT_FOUND,
+            )
+        golden["annotation_ids"] = self.store.list_golden_annotation_ids(
+            golden["golden_dataset_id"],
+        )
+        return golden
+
+    def validate_golden(self, *, params: JSON, **_: object) -> JSON:
+        """校验黄金样本成员、状态、来源和 baseline replay（SACW 6.3）。"""
+        golden = self.get_golden(params=params)
+        annotation_ids = golden["annotation_ids"]
+        issues: list[str] = []
+        if not annotation_ids:
+            issues.append("golden dataset has no annotation membership")
+        for annotation_id in annotation_ids:
+            annotation = self.store.get_annotation(annotation_id)
+            if annotation is None:
+                issues.append(f"{annotation_id}: annotation not found")
+                continue
+            if annotation["status"] not in GROUND_TRUTH_STATUSES:
+                issues.append(f"{annotation_id}: status {annotation['status']} is not Ground Truth")
+            if annotation["label_source"] not in GROUND_TRUTH_SOURCES:
+                issues.append(
+                    f"{annotation_id}: label_source {annotation['label_source']} is not human",
+                )
+            if annotation.get("deleted_at") is not None:
+                issues.append(f"{annotation_id}: annotation is deleted")
+        if not golden.get("baseline_replay_run_id"):
+            issues.append("golden dataset is not bound to a baseline replay run")
+        if not golden.get("baseline_config_hash"):
+            issues.append("golden dataset has no baseline config hash")
+        return {
+            "valid": not issues,
+            "issues": issues,
+            "goldenDatasetId": golden["golden_dataset_id"],
+            "annotationCount": len(annotation_ids),
+            "annotationHash": golden["annotation_hash"],
+            "dataHash": golden["data_hash"],
+            "baselineReplayRunId": golden.get("baseline_replay_run_id"),
+        }
+
+    def split_golden(self, *, body: JSON, params: JSON, **_: object) -> JSON:
+        """登记黄金样本的数据切分（SACW 5.3）。
+
+        采集数据没有可自动推断的训练/验证边界，因此区间必须由调用方显式传入，
+        服务端只做一致性与哈希绑定，不擅自切分。
+        """
+        golden = self.get_golden(params=params)
+        split = str(body.get("split") or golden["split"]).upper()
+        range_start = str(body.get("range_start") or "")
+        range_end = str(body.get("range_end") or "")
+        if not range_start or not range_end:
+            raise ApiError(
+                "MISSING_RANGE",
+                "range_start and range_end are required for an explicit data split",
+            )
+        if range_end <= range_start:
+            raise ApiError("INVALID_RANGE", "range_end must be after range_start")
+        dataset_id = str(body.get("dataset_id") or golden.get("dataset_id") or "")
+        if not dataset_id:
+            raise ApiError("MISSING_DATASET", "golden dataset has no dataset_id")
+        return self.store.save_dataset_split(
+            dataset_id=dataset_id,
+            split=split,
+            range_start=range_start,
+            range_end=range_end,
+            data_hash=str(golden["data_hash"]),
+            annotation_hash=str(golden["annotation_hash"]),
+        )
+
+    def list_dataset_splits(self, *, params: JSON, **_: object) -> JSON:
+        """列出数据集切分。"""
+        return {"splits": self.store.list_dataset_splits(params["dataset_id"])}
+
     def build_snapshot_view(self, *, query: dict[str, list[str]], **_: object) -> JSON:
         """构建初始状态快照视图。
 
@@ -938,6 +1412,232 @@ class ApiRouter:
             "snapshotHash": result.snapshot_hash,
             "payload": result.payload,
         }
+
+    def save_snapshot_artifact(self, *, body: JSON, **_: object) -> JSON:
+        """构建并保存一份初始状态快照元数据（SACW 6.3、24）。"""
+        timeframe = str(body.get("timeframe") or "4H")
+        query: dict[str, list[str]] = {"timeframe": [timeframe]}
+        if body.get("as_of"):
+            query["as_of"] = [str(body["as_of"])]
+        result = self.build_snapshot_view(query=query)
+        dataset_id = (
+            result["payload"].get("dataset_id")
+            or self.service.dataset_info().dataset_id
+        )
+        return self.store.save_snapshot_artifact(
+            dataset_id=str(dataset_id),
+            snapshot_hash=str(result["snapshotHash"]),
+            status=str(result["status"]),
+            path=body.get("path"),
+            detail={
+                "timeframe": timeframe,
+                "asOfNs": result["asOfNs"],
+                "missing": result["missing"],
+                "payload": result["payload"],
+            },
+        )
+
+    def list_snapshot_artifacts(self, *, query: dict[str, list[str]], **_: object) -> JSON:
+        """列出快照 artifact 元数据。"""
+        items = self.store.list_snapshot_artifacts(
+            dataset_id=_first(query, "dataset_id"),
+        )
+        return {"snapshots": items, "count": len(items)}
+
+    # ------------------------------------------------------------- 程序回放
+
+    def _program_events_for(self, timeframe: Timeframe) -> list[tuple[str, JSON, str, str]]:
+        """把一个周期的当前结构事实转成可持久化回放事件（SACW 6.4）。"""
+        engine = self.service.context.engine(timeframe)
+        events: list[tuple[str, JSON, str, str]] = []
+
+        for point in engine.swings:
+            events.append(
+                (
+                    "SWING_POINT",
+                    {
+                        "swing_id": point.point_id,
+                        "direction": point.direction.value,
+                        "price": str(point.price),
+                        "occurred_at": _ns_to_iso(point.occurred_at_ns),
+                        "confirmed_at": _ns_to_iso(point.confirmed_at_ns),
+                        "atr_snapshot": str(point.atr_snapshot),
+                        "source_bar_id": point.source_bar_id,
+                        "sequence": point.sequence,
+                    },
+                    point.source_bar_id,
+                    _ns_to_iso(point.confirmed_at_ns),
+                ),
+            )
+
+        for structure in engine.structures.structures:
+            events.append(
+                (
+                    "N_STRUCTURE",
+                    {
+                        "structure_id": structure.n_structure_id,
+                        "status": structure.status.value,
+                        "l1": structure.l1.point_id,
+                        "h1": structure.h1.point_id,
+                        "l2": structure.l2.point_id,
+                        "h2": structure.h2.point_id,
+                        "retracement": str(structure.retracement_ratio),
+                        "retracement_class": structure.retracement_class.value,
+                        "confirmed_at": _ns_to_iso(structure.confirmed_at_ns),
+                        "invalidation_status": engine.structures.invalidation_status,
+                    },
+                    structure.h2.source_bar_id,
+                    _ns_to_iso(structure.confirmed_at_ns),
+                ),
+            )
+
+        for zone in engine.zones.zones:
+            events.append(
+                (
+                    "ZONE",
+                    {
+                        "zone_id": zone.zone_id,
+                        "zone_type": zone.zone_type.value,
+                        "status": zone.status.value,
+                        "version": zone.version,
+                        "center": str(zone.center),
+                        "lower": str(zone.lower),
+                        "upper": str(zone.upper),
+                        "half_width": str(zone.half_width),
+                        "half_width_basis": zone.basis.value,
+                        "anchor_swing_ids": [anchor.swing_id for anchor in zone.anchors],
+                        "anchor_count": zone.anchor_count,
+                    },
+                    None,
+                    _ns_to_iso(zone.updated_at_ns),
+                ),
+            )
+
+        if engine.state is not None:
+            events.append(
+                (
+                    "STATE",
+                    {
+                        "state": str(engine.state),
+                        "bars": engine.bar_count,
+                        "as_of": _ns_to_iso(engine.last_bar.ts_close_ns)
+                        if engine.last_bar is not None
+                        else None,
+                    },
+                    engine.last_bar.bar_id if engine.last_bar is not None else None,
+                    _ns_to_iso(engine.last_bar.ts_close_ns)
+                    if engine.last_bar is not None
+                    else _iso_now(),
+                ),
+            )
+        return events
+
+    def create_replay_run(self, *, body: JSON, **_: object) -> JSON:
+        """创建并执行一次确定性程序回放，持久化结构事件（SACW 6.4）。"""
+        mode = str(body.get("mode") or "BATCH_DETERMINISTIC").upper()
+        if mode != "BATCH_DETERMINISTIC":
+            raise ApiError("INVALID_REPLAY_MODE", "only BATCH_DETERMINISTIC is supported")
+        project_id = str(body.get("project_id") or "")
+        if not project_id:
+            projects = self.store.list_projects()
+            if not projects:
+                raise ApiError("MISSING_PROJECT", "project_id is required")
+            project_id = str(projects[0]["project_id"])
+        golden = self._frozen_golden_dataset(project_id, body.get("golden_dataset_id"))
+        replay_run_id = self._comparison_baseline(golden)
+        raw_timeframes = body.get("timeframes") or [
+            timeframe.value for timeframe in Timeframe
+        ]
+        timeframes = [_parse_timeframe(str(item)) for item in raw_timeframes]
+        dataset = self.service.dataset_info()
+        run = self.store.create_replay_run(
+            code_commit=body.get("code_commit"),
+            config_hash=self.service.config_hash,
+            dataset_hash=dataset.data_hash,
+            notes=(
+                f"golden={golden['golden_dataset_id']} baseline={replay_run_id} "
+                f"mode={mode}"
+            ),
+        )
+        counts: dict[str, int] = {}
+        try:
+            for timeframe in timeframes:
+                events = self._program_events_for(timeframe)
+                counts[timeframe.value] = len(events)
+                for event_type, payload, bar_id, at in events:
+                    self.store.append_program_event(
+                        run_id=run["run_id"],
+                        event_type=event_type,
+                        timeframe=timeframe.value,
+                        payload=payload,
+                        bar_id=bar_id,
+                        at=at,
+                    )
+        except Exception:
+            self.store.finish_replay_run(run_id=run["run_id"], status="FAILED")
+            raise
+        finished = self.store.finish_replay_run(run_id=run["run_id"])
+        return {
+            **finished,
+            "goldenDatasetId": golden["golden_dataset_id"],
+            "baselineReplayRunId": replay_run_id,
+            "mode": mode,
+            "timeframes": sorted({timeframe.value for timeframe in timeframes}),
+            "eventCounts": counts,
+            "eventCount": sum(counts.values()),
+        }
+
+    def _replay_run(self, run_id: str) -> JSON:
+        run = self.store.get_replay_run(run_id)
+        if run is None:
+            raise ApiError(
+                "UNKNOWN_REPLAY_RUN",
+                f"unknown replay run: {run_id}",
+                HTTPStatus.NOT_FOUND,
+            )
+        return run
+
+    def list_replay_runs(self, **_: object) -> JSON:
+        """列出全部程序回放。"""
+        runs = self.store.list_replay_runs()
+        return {"runs": runs, "count": len(runs)}
+
+    def get_replay_run(self, *, params: JSON, **_: object) -> JSON:
+        """读取一次程序回放。"""
+        return self._replay_run(params["run_id"])
+
+    def list_replay_events(self, *, query: dict[str, list[str]], params: JSON, **_: object) -> JSON:
+        """列出回放事件，可按周期/类型过滤。"""
+        self._replay_run(params["run_id"])
+        timeframe = _first(query, "timeframe")
+        event_type = _first(query, "event_type")
+        events = self.store.list_program_events(params["run_id"])
+        if timeframe:
+            events = [item for item in events if item["timeframe"] == timeframe]
+        if event_type:
+            events = [item for item in events if item["event_type"] == event_type]
+        return {"events": events, "count": len(events)}
+
+    def list_replay_snapshots(self, *, params: JSON, **_: object) -> JSON:
+        """返回当前数据集相关的快照 artifact。"""
+        run = self._replay_run(params["run_id"])
+        items = self.store.list_snapshot_artifacts()
+        return {
+            "snapshots": items,
+            "count": len(items),
+            "replayRunId": run["run_id"],
+            "note": (
+                "snapshot artifacts are dataset-scoped; "
+                "replay snapshots share the current dataset"
+            ),
+        }
+
+    def cancel_replay_run(self, *, params: JSON, **_: object) -> JSON:
+        """取消仍在运行的 replay；已完成的结果保持不可变。"""
+        run = self._replay_run(params["run_id"])
+        if run.get("status") == "RUNNING":
+            return self.store.finish_replay_run(run_id=run["run_id"], status="CANCELED")
+        return run
 
     # --------------------------------------------------------------- 回归
 

@@ -29,6 +29,15 @@
     WEAKENING: 1, PULLBACK: 1, TRANSITION: 1, REVERSAL_CANDIDATE: 1, RANGE: 1
   };
 
+  var STATE_OPTIONS = {
+    "1M": ["UPTREND", "WEAKENING", "DOWNTREND", "UNKNOWN"],
+    "1W": ["BULLISH", "WEAKENING", "BEARISH", "TRANSITION", "UNKNOWN"],
+    "1D": ["BULLISH", "PULLBACK", "BEARISH", "TRANSITION", "UNKNOWN"],
+    "4H": ["TREND_UP", "TREND_DOWN", "PULLBACK", "RANGE", "TRANSITION", "UNKNOWN"],
+    "1H": ["BULLISH", "BEARISH", "PULLBACK", "RANGE", "REVERSAL_CANDIDATE",
+      "TRANSITION", "UNKNOWN"]
+  };
+
   var STATUS_FLOW = {
     DRAFT: [["SUBMITTED", "提交审核"], ["AMBIGUOUS", "标记歧义"]],
     SUBMITTED: [["REVIEWED", "审核通过"], ["REJECTED", "审核拒绝"]],
@@ -44,8 +53,16 @@
     tf: "4H",
     project: null,
     annotations: [],
+    projectAnnotations: [],
+    groundTruthCount: 0,
     goldenDatasets: [],
     zoneMode: "ANCHOR_ONLY",
+    intervalState: null,
+    protectedEventType: "INIT",
+    manualOverlays: [],
+    manualPriceLines: [],
+    continuous: true,
+    savedCount: 0,
     tool: "select",
     pending: null,
     pendingClicks: [],
@@ -59,7 +76,7 @@
     lastSize: {},
     toggles: {
       sma: true, atr: true, zigzag: true, candidate: true,
-      swing: true, zone: true, structure: true, levels: true
+      swing: true, zone: true, structure: true, levels: true, manual: true
     },
     cases: [],
     suite: null,
@@ -74,6 +91,17 @@
       appliedAt: 0,
       error: null,
       info: null
+    },
+    // 向左滚动加载更早历史：只追加 K 线，叠加层保持服务端最新一版。
+    view: {
+      userAdjusted: false
+    },
+    history: {
+      busy: false,
+      ready: false,
+      suppress: false,
+      exhausted: {},
+      loadedLeft: {}
     }
   };
 
@@ -146,6 +174,20 @@
     return -1;
   }
 
+  /* 相对前一根收盘的涨跌额与百分比，对齐 TradingView 图例的显示习惯。 */
+  function changeText(section, bar, candle) {
+    if (!section || !section.candles || !bar) return "";
+    var index = timeToBarIndex(section.candles, bar.time);
+    if (index <= 0) return "";
+    var prev = section.candles[index - 1];
+    var prevClose = Number(prev.close);
+    if (!isFinite(prevClose) || prevClose === 0) return "";
+    var diff = Number(candle.close) - prevClose;
+    var pct = (diff / prevClose) * 100;
+    var sign = diff >= 0 ? "+" : "";
+    return "  Δ " + sign + fmt(diff) + " (" + sign + pct.toFixed(2) + "%)";
+  }
+
   function barAt(candles, time) {
     var index = timeToBarIndex(candles, time);
     return index < 0 ? null : candles[index];
@@ -181,12 +223,24 @@
         vertLines: { color: COLORS.grid },
         horzLines: { color: COLORS.grid }
       },
-      rightPriceScale: { borderColor: COLORS.border },
+      // 价格轴自动缩放：按当前可见 K 线与叠加层动态适配纵向范围。
+      rightPriceScale: {
+        borderColor: COLORS.border,
+        autoScale: true,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+        entireTextOnly: true
+      },
       timeScale: {
         borderColor: COLORS.border,
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 4
+        rightOffset: 6,
+        barSpacing: 8,
+        minBarSpacing: 0.5,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+        lockVisibleTimeRangeOnResize: true,
+        shiftVisibleRangeOnNewBar: false
       },
       crosshair: {
         mode: LWC.CrosshairMode.Normal,
@@ -205,6 +259,8 @@
     state.series = {};
     state.overlays = [];
     state.priceLines = [];
+    state.manualOverlays = [];
+    state.manualPriceLines = [];
     state.smaTimes = [];
   }
 
@@ -215,6 +271,129 @@
       to.timeScale().setVisibleLogicalRange(range);
       state.syncing = false;
     });
+  }
+
+  /* ------------------------------------------------------- 向左滚动加载历史 */
+
+  /* 整页只带最近 MAX_SERIES_BARS 根；用户把视野拖到最左侧时，按需向服务端
+   * 取更早的一段并前插，避免首次打开就传输几十万根。 */
+
+  var HISTORY_PAGE_BARS = 1000;
+  var HISTORY_TRIGGER_BARS = 50;
+
+  function bindHistoryLoading(chart) {
+    // fitContent() 会触发一次范围回调，且初始可见范围含全部已装载 K 线。
+    // 只有在首屏渲染完成（state.history.ready）后、用户把视野拖回最左端时才加载。
+    chart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
+      if (!range || !state.history.ready) return;
+      // 程序性改写视野（前插补偿、同步图表）不应被当成用户手势，否则会连锁加载。
+      if (state.history.suppress) return;
+      if (range.from < HISTORY_TRIGGER_BARS) loadOlderBars();
+    });
+  }
+
+  /* 在前插历史后补偿视野：同步调用期间挂起加载触发，且只在偏移确实生效时
+   * 写入一次，避免与用户滚轮缩放争夺视野。 */
+  function shiftVisibleRange(added) {
+    if (!added || !state.priceChart) return;
+    var range = state.priceChart.timeScale().getVisibleLogicalRange();
+    if (!range) return;
+    state.history.suppress = true;
+    try {
+      var shifted = { from: range.from + added, to: range.to + added };
+      state.priceChart.timeScale().setVisibleLogicalRange(shifted);
+      if (state.atrChart) state.atrChart.timeScale().setVisibleLogicalRange(shifted);
+    } finally {
+      // keepAlive 到下一帧：subscribe 回调可能在 setVisibleLogicalRange 之后异步派发。
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(function () { state.history.suppress = false; });
+      } else {
+        state.history.suppress = false;
+      }
+    }
+  }
+
+  function sectionCandles() {
+    var section = currentSection();
+    return (section && section.candles) || null;
+  }
+
+  function loadOlderBars() {
+    var code = state.tf;
+    if (state.history.busy || state.history.exhausted[code]) return;
+    var candles = sectionCandles();
+    if (!candles || !candles.length) return;
+
+    state.history.busy = true;
+    // 图表时间是秒级整数，而 /market/bars 的 to 接受 ISO 或纳秒整数；统一发 ISO，
+    // 避免把秒级时间戳当成纳秒解析。
+    var oldest = new Date(candles[0].time * 1000).toISOString();
+    var params = "timeframe=" + encodeURIComponent(code) +
+      "&to=" + encodeURIComponent(oldest) + "&limit=" + HISTORY_PAGE_BARS;
+
+    api("/api/v1/market/bars?" + params).then(function (data) {
+      state.history.busy = false;
+      var older = data.bars || [];
+      if (!older.length) {
+        state.history.exhausted[code] = true;
+        setStatus("已加载到最早一根 K 线（" + code + "）");
+        return;
+      }
+      prependHistory(code, older);
+    }).catch(function (error) {
+      state.history.busy = false;
+      setStatus("加载更早数据失败：" + error.message);
+    });
+  }
+
+  function prependHistory(code, bars) {
+    var section = (state.payload.series || {})[code];
+    if (!section || !section.candles) return;
+
+    var existing = {};
+    section.candles.forEach(function (c) { existing[c.time] = true; });
+
+    var added = bars.map(function (bar) {
+      return {
+        time: toChartTime(bar.openTime),
+        open: Number(bar.open), high: Number(bar.high),
+        low: Number(bar.low), close: Number(bar.close),
+        isClosed: true,
+        closeTime: toChartTime(bar.closeTime),
+        barId: bar.barId
+      };
+    }).filter(function (candle) { return !existing[candle.time]; });
+
+    if (!added.length) {
+      state.history.exhausted[code] = true;
+      return;
+    }
+
+    // 价格类序列由前端前插；指标/叠加层保持服务端下发的最新一版。
+    section.candles = added.concat(section.candles);
+    var volumes = bars.map(function (bar) {
+      return {
+        time: toChartTime(bar.openTime),
+        value: Number(bar.volume),
+        color: Number(bar.close) >= Number(bar.open)
+          ? "rgba(38, 166, 154, 0.45)" : "rgba(239, 83, 80, 0.45)"
+      };
+    }).filter(function (v) { return !existing[v.time]; });
+    section.volume = volumes.concat(section.volume || []);
+    state.history.loadedLeft[code] = (state.history.loadedLeft[code] || 0) + added.length;
+
+    if (code === state.tf && state.series.candles) {
+      state.series.candles.setData(uniqueAscending(section.candles));
+      if (state.series.volume) state.series.volume.setData(uniqueAscending(section.volume));
+      // 前插后保持用户当前视野，避免画面跳动。
+      shiftVisibleRange(added.length);
+    }
+    setStatus("已向前加载 " + added.length + " 根（" + code + "，共 " +
+      section.candles.length + " 根）");
+  }
+
+  function toChartTime(iso) {
+    return Math.floor(new Date(iso).getTime() / 1000);
   }
 
   function resizeChart(chart, container, key) {
@@ -268,19 +447,26 @@
     return (section && section.zones) || [];
   }
 
+  /* candidates 只包含“存在候选”的 Bar（稀疏），按需建立时间索引避免线性扫描。 */
   function currentCandidateAt(time) {
     var section = currentSection();
     if (!section || !section.candidates) return null;
-    for (var i = 0; i < section.candidates.length; i += 1) {
-      if (section.candidates[i].time === time) return section.candidates[i];
+    if (!section.candidateIndex || section.candidateIndexSize !== section.candidates.length) {
+      var index = {};
+      for (var i = 0; i < section.candidates.length; i += 1) {
+        index[section.candidates[i].time] = section.candidates[i];
+      }
+      section.candidateIndex = index;
+      section.candidateIndexSize = section.candidates.length;
     }
-    return null;
+    return section.candidateIndex[time] || null;
   }
 
   /* -------------------------------------------------------------- 绘图 */
 
   function buildCharts() {
     destroyCharts();
+    state.history.ready = false;
 
     var section = currentSection();
     if (!section || !section.candles || !section.candles.length) {
@@ -349,9 +535,11 @@
     bindCrosshair(priceChart, "price");
     bindCrosshair(atrChart, "atr");
     bindChartClick(priceChart);
+    bindHistoryLoading(priceChart);
+    bindViewportReset(priceChart);
+    bindOverlayReclip(priceChart);
 
-    priceChart.timeScale().fitContent();
-    atrChart.timeScale().fitContent();
+    applyInitialView(priceChart, atrChart);
 
     drawZones();
     drawStructures();
@@ -362,6 +550,104 @@
 
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(resizeCharts);
     setTimeout(resizeCharts, 120);
+
+    // 叠加层绘制与 resize 仍会触发范围回调，等首屏彻底稳定后再允许向左加载。
+    setTimeout(function () { state.history.ready = true; }, 300);
+  }
+
+  /* ------------------------------------------------------------ 自适应视图 */
+
+  /* TradingView 风格的首屏行为：默认展示最近一段便于阅读的根数，而不是把
+   * 下发窗口里的全部 K 线塞进一屏（1200 根在 1680px 下每根不足 1.3px）。
+   * 用户一旦自己缩放/平移，就不再自动改写视野（state.view.userAdjusted）。 */
+  var DEFAULT_VISIBLE_BARS = 180;
+
+  function applyInitialView(priceChart, atrChart) {
+    var candles = sectionCandles() || [];
+    var count = candles.length;
+    if (!count) {
+      priceChart.timeScale().fitContent();
+      if (atrChart) atrChart.timeScale().fitContent();
+      return;
+    }
+    var span = Math.min(DEFAULT_VISIBLE_BARS, count);
+    var range = { from: count - span, to: count };
+    priceChart.timeScale().setVisibleLogicalRange(range);
+    if (atrChart) atrChart.timeScale().setVisibleLogicalRange(range);
+    // 价格轴立即按可见区间重算，避免沿用上一周期的纵向范围。
+    autoscalePrice(priceChart);
+  }
+
+  /* 视野变化后重画叠加层：Zone/N 结构需要按新的可见区重新裁剪，
+   * 否则越界段会继续参与价格轴自动缩放。节流到下一帧，避免拖动时反复重绘。 */
+  function bindOverlayReclip(chart) {
+    var pending = false;
+    chart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
+      if (!range || !state.history.ready || state.history.suppress) return;
+      if (pending) return;
+      pending = true;
+      var redraw = function () {
+        pending = false;
+        redrawOverlays();
+      };
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(redraw);
+      else setTimeout(redraw, 16);
+    });
+  }
+
+  function bindViewportReset(chart) {
+    // 双击图区重置为自适应视图，行为对齐 TradingView。
+    // 双击已被「Swing 同一根 Bar 确认」使用，因此只在选择工具且没有进行中的
+    // 标注时接管，避免破坏标注流程。
+    chart.subscribeDblClick(function (param) {
+      if (!param || !param.point) return;
+      if (state.tool !== "select" || state.pendingClicks.length) return;
+      resetViewport();
+    });
+  }
+
+  function autoscalePrice(chart) {
+    if (!chart) return;
+    try {
+      if (state.series.candles) state.series.candles.priceScale().applyOptions({ autoScale: true });
+    } catch (err) { /* 图表可能已被重建 */ }
+  }
+
+  /* 重置为自适应视图（工具栏按钮 / 双击图表）。 */
+  function resetViewport() {
+    if (!state.priceChart) return;
+    var candles = sectionCandles() || [];
+    var count = candles.length;
+    if (!count) return;
+    var span = Math.min(DEFAULT_VISIBLE_BARS, count);
+    var range = { from: count - span, to: count };
+    state.history.suppress = true;
+    try {
+      state.priceChart.timeScale().setVisibleLogicalRange(range);
+      if (state.atrChart) state.atrChart.timeScale().setVisibleLogicalRange(range);
+      autoscalePrice(state.priceChart);
+    } finally {
+      setTimeout(function () { state.history.suppress = false; }, 0);
+    }
+    state.view.userAdjusted = false;
+    setStatus("已重置视图为最近 " + span + " 根（自适应）");
+  }
+
+  /* 显示已加载的全部 K 线（对齐 TradingView 的“全部数据”按钮）。 */
+  function fitAll() {
+    if (!state.priceChart) return;
+    var candles = sectionCandles() || [];
+    if (!candles.length) return;
+    state.history.suppress = true;
+    try {
+      state.priceChart.timeScale().fitContent();
+      if (state.atrChart) state.atrChart.timeScale().fitContent();
+      autoscalePrice(state.priceChart);
+    } finally {
+      setTimeout(function () { state.history.suppress = false; }, 0);
+    }
+    state.view.userAdjusted = false;
+    setStatus("已显示全部 " + candles.length + " 根 K 线");
   }
 
   function clearOverlays() {
@@ -396,10 +682,149 @@
     state.overlays.push(line);
   }
 
+  function isoToChartTime(value) {
+    var ms = Date.parse(String(value || ""));
+    return isFinite(ms) ? Math.floor(ms / 1000) : null;
+  }
+
+  function clearManualOverlays() {
+    for (var i = 0; i < state.manualOverlays.length; i += 1) {
+      try { state.priceChart.removeSeries(state.manualOverlays[i]); } catch (err) { /* 已移除 */ }
+    }
+    state.manualOverlays = [];
+    var candles = state.series.candles;
+    if (!candles) {
+      state.manualPriceLines = [];
+      return;
+    }
+    for (var j = 0; j < state.manualPriceLines.length; j += 1) {
+      try { candles.removePriceLine(state.manualPriceLines[j]); } catch (err) { /* 已移除 */ }
+    }
+    state.manualPriceLines = [];
+  }
+
+  function addManualLine(points, color, style) {
+    if (!state.priceChart || !points || points.length < 2) return;
+    var line = state.priceChart.addLineSeries({
+      color: color,
+      lineWidth: 2,
+      lineStyle: style,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false
+    });
+    line.setData(uniqueAscending(points));
+    state.manualOverlays.push(line);
+  }
+
+  function drawManualAnnotations() {
+    if (!state.priceChart || !state.toggles.manual) return;
+    clearManualOverlays();
+    var swings = {};
+    sectionSwings().forEach(function (item) { swings[item.id] = item; });
+    var lastTime = null;
+    var section = currentSection();
+    if (section && section.candles && section.candles.length) {
+      lastTime = section.candles[section.candles.length - 1].time;
+    }
+    var color = "#ce93d8";
+    state.annotations.forEach(function (annotation) {
+      var payload = annotation.payload || {};
+      if (annotation.entity_type === "STATE_INTERVAL") {
+      return payload.state + " · " + payload.valid_from + " → " +
+        (payload.valid_to || "—") + " · known " + (payload.known_at || "—");
+    }
+    if (annotation.entity_type === "PROTECTED_POINT") {
+      return "Protected" + (payload.direction === "HIGH" ? "High" : "Low") +
+        " " + payload.price + " · " + (payload.event_type || "INIT") +
+        " · " + payload.valid_from;
+    }
+    if (annotation.entity_type === "ZONE") {
+        var anchorPoints = (payload.anchor_swing_ids || []).map(function (id) {
+          return swings[id];
+        }).filter(Boolean);
+        if (anchorPoints.length < 2) return;
+        var startTime = Math.min.apply(null, anchorPoints.map(function (p) { return p.time; }));
+        var endTime = Math.max.apply(null, anchorPoints.map(function (p) { return p.time; }));
+        if (lastTime !== null && endTime < lastTime) endTime = lastTime;
+        var isHuman = payload.annotation_mode === "HUMAN_BOUNDARY";
+        var lower = isHuman ? Number(payload.human_lower) : Number(payload.lower);
+        var upper = isHuman ? Number(payload.human_upper) : Number(payload.upper);
+        var style = isHuman ? LWC.LineStyle.Dotted : LWC.LineStyle.Solid;
+        if (isFinite(lower)) {
+          addManualLine([{ time: startTime, value: lower }, { time: endTime, value: lower }],
+            color, style);
+        }
+        if (isFinite(upper)) {
+          addManualLine([{ time: startTime, value: upper }, { time: endTime, value: upper }],
+            color, style);
+        }
+      } else if (annotation.entity_type === "N_STRUCTURE") {
+        var ids = [payload.l1_swing_id, payload.h1_swing_id,
+          payload.l2_swing_id, payload.h2_swing_id];
+        var points = ids.map(function (id) {
+          var point = swings[id];
+          return point ? { time: point.time, value: point.price } : null;
+        }).filter(Boolean);
+        if (points.length === 4) addManualLine(points, "#ba68c8", LWC.LineStyle.Solid);
+      } else if (annotation.entity_type === "PROTECTED_POINT") {
+        var price = Number(payload.price);
+        var candles = state.series.candles;
+        if (!candles || !isFinite(price)) return;
+        state.manualPriceLines.push(candles.createPriceLine({
+          price: price,
+          color: color,
+          lineWidth: 1,
+          lineStyle: LWC.LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: "M Protected" + (payload.direction === "HIGH" ? "High" : "Low")
+        }));
+      }
+    });
+  }
+
+  /* 把叠加层线段裁剪到当前可见时间范围。
+   *
+   * Zone 线段通常是 [createdAt, updatedAt] 两个端点。若整段都在视野之外，
+   * Lightweight Charts 仍会把端点计入价格轴自动缩放，把这些金额贴到左边缘
+   * 画线并撑高价格轴。裁剪后与此无关的段直接跳过。 */
+  function clipSegment(points, visible) {
+    if (!points || points.length < 2) return null;
+    var from = points[0], to = points[points.length - 1];
+    if (!visible) return { points: [from, to] };
+    if (to.time < visible.fromTime || from.time > visible.toTime) return null;
+    // 仅一侧越界时，用可见边界处的取值（线性插值）替换该端点。
+    var startTime = Math.max(from.time, visible.fromTime);
+    var endTime = Math.min(to.time, visible.toTime);
+    var value = function (t) {
+      if (to.time === from.time) return from.value;
+      var ratio = (t - from.time) / (to.time - from.time);
+      return from.value + (to.value - from.value) * ratio;
+    };
+    return {
+      points: [
+        { time: startTime, value: value(startTime) },
+        { time: endTime, value: value(endTime) }
+      ]
+    };
+  }
+
+  function visibleTimeWindow() {
+    if (!state.priceChart) return null;
+    var candles = sectionCandles();
+    var range = state.priceChart.timeScale().getVisibleLogicalRange();
+    if (!candles || !candles.length || !range) return null;
+    var fromIndex = Math.max(0, Math.floor(range.from));
+    var toIndex = Math.min(candles.length - 1, Math.ceil(range.to));
+    if (fromIndex > toIndex) return null;
+    return { fromTime: candles[fromIndex].time, toTime: candles[toIndex].time };
+  }
+
   function drawZones() {
     if (!state.priceChart) return;
     var zones = currentZones();
     var zoneSeriesCount = state.overlays.length;
+    var visible = visibleTimeWindow();
 
     zones.forEach(function (zone) {
       var closed = zone.status === "BROKEN" || zone.status === "INVALIDATED";
@@ -407,10 +832,15 @@
       var alpha = closed ? 0.4 : 1.0;
       var color = hexWithAlpha(zone.color, alpha);
       var edgeStyle = closed ? LWC.LineStyle.Dotted : LWC.LineStyle.Solid;
-      addZoneLine(zone.segments.upper, color, edgeStyle);
-      addZoneLine(zone.segments.lower, color, edgeStyle);
-      addZoneLine(zone.segments.center, hexWithAlpha(zone.color, closed ? 0.25 : 0.6),
-        LWC.LineStyle.Dashed);
+      ["upper", "lower"].forEach(function (edge) {
+        var clipped = clipSegment(zone.segments[edge], visible);
+        if (clipped) addZoneLine(clipped.points, color, edgeStyle);
+      });
+      var center = clipSegment(zone.segments.center, visible);
+      if (center) {
+        addZoneLine(center.points, hexWithAlpha(zone.color, closed ? 0.25 : 0.6),
+          LWC.LineStyle.Dashed);
+      }
     });
     state.zoneSeriesCount = state.overlays.length - zoneSeriesCount;
   }
@@ -496,6 +926,33 @@
         });
       });
     }
+    if (state.toggles.manual) {
+      state.annotations.forEach(function (annotation) {
+        var payload = annotation.payload || {};
+        var time = null;
+        var position = "aboveBar";
+        var text = "";
+        if (annotation.entity_type === "SWING_POINT") {
+          time = isoToChartTime(payload.occurred_at);
+          position = payload.direction === "HIGH" ? "aboveBar" : "belowBar";
+          text = "M " + payload.direction.charAt(0) + " " + payload.price;
+        } else if (annotation.entity_type === "STATE_INTERVAL") {
+          time = isoToChartTime(payload.valid_from);
+          position = "belowBar";
+          text = "M " + payload.state;
+        } else if (annotation.entity_type === "PROTECTED_POINT") {
+          time = isoToChartTime(payload.valid_from);
+          position = payload.direction === "HIGH" ? "aboveBar" : "belowBar";
+          text = "M P" + payload.direction.charAt(0);
+        }
+        if (time !== null) {
+          markers.push({
+            time: time, position: position, color: "#ce93d8",
+            shape: "circle", text: text
+          });
+        }
+      });
+    }
     if (state.pending && state.pending.markers) {
       state.pending.markers.forEach(function (m) {
         markers.push({
@@ -525,6 +982,7 @@
     if (state.toggles.levels) drawLevelLines();
     else clearPriceLines();
     drawReversalThreshold();
+    drawManualAnnotations();
     refreshMarkers();
     resizeCharts();
   }
@@ -573,6 +1031,7 @@
           state.tf + "  " + fmtTime(param.time) +
           "  O " + fmt(candle.open) + "  H " + fmt(candle.high) +
           "  L " + fmt(candle.low) + "  C " + fmt(candle.close) +
+          changeText(section, bar, candle) +
           (bar && bar.isClosed ? "  [完成 Bar]" : "  [FORMING_BAR]");
       }
       var ind = [];
@@ -626,28 +1085,159 @@
 
   function bindChartClick(chart) {
     chart.subscribeClick(function (param) {
-      if (!param || !param.time) return;
+      if (!param || !param.time) {
+        if (state.tool !== "select") {
+          setStatus("请点击 K 线数据区域（当前点击位置没有对应 Bar）");
+        }
+        return;
+      }
       var section = currentSection();
-      if (!section) return;
+      if (!section) {
+        setStatus("当前周期没有可标注的数据");
+        return;
+      }
       var bar = barAt(section.candles, param.time);
-      if (!bar) return;
+      if (!bar) {
+        setStatus("点击位置没有对应 Bar，请点击蜡烛区域");
+        return;
+      }
       handleChartClick(bar, param);
+    });
+    // LWC 会把快速双击合并成 dblclick，第二次 click 不再触发。Swing 允许
+    // occurrence 与 confirmation 是同一根 Bar，因此这里补一次确认点击。
+    chart.subscribeDblClick(function (param) {
+      if (state.tool !== "swing" || !param || !param.time) return;
+      if (state.pendingClicks.length !== 1) return;
+      var section = currentSection();
+      var bar = section ? barAt(section.candles, param.time) : null;
+      if (!bar || bar.time !== state.pendingClicks[0].occurredBar.time) return;
+      handleSwingClick(bar);
     });
   }
 
   function handleChartClick(bar, param) {
     if (state.tool === "select") {
       state.selectedBar = bar;
-      setStatus("已选 Bar " + fmtTime(bar.time) + "（" + state.tf + "）");
+      setStatus("已选 Bar " + fmtTime(bar.time) + "（" + state.tf +
+        "）；标注请先在「标注工具」中选择 Swing / N 结构 / Zone / 保护点 / 状态区间");
       return;
     }
     if (state.tool === "swing") {
+      if (state.pending) {
+        setStatus("已有待提交的 SwingPoint；请先点击「保存草稿」或「取消」，再开始下一个");
+        return;
+      }
       handleSwingClick(bar);
       return;
     }
     if (state.tool === "nstructure" || state.tool === "zone") {
       handleAnchorClick(bar);
+      return;
     }
+    if (state.tool === "protected") {
+      if (state.pending) {
+        setStatus("已有待提交的保护点；请先保存或取消");
+        return;
+      }
+      handleProtectedClick(bar);
+      return;
+    }
+    if (state.tool === "state") {
+      handleStateIntervalClick(bar);
+    }
+  }
+
+  function clickDirection(bar) {
+    var high = Number(bar.high);
+    var low = Number(bar.low);
+    var price = state.lastCrosshairPrice;
+    if (price === undefined || price === null || !isFinite(price)) return "HIGH";
+    return Number(price) >= (high + low) / 2 ? "HIGH" : "LOW";
+  }
+
+  function handleProtectedClick(bar) {
+    if (state.tf === "15M") {
+      setStatus("15M 不允许独立 ProtectedLow；请引用当前有效 NStructure.L2");
+      return;
+    }
+    var direction = clickDirection(bar);
+    var price = direction === "HIGH" ? Number(bar.high) : Number(bar.low);
+    var eventType = el.protectedEventType.value;
+    var validFrom = new Date(bar.time * 1000).toISOString();
+    var payload = {
+      direction: direction,
+      price: price.toFixed(2),
+      event_type: eventType,
+      valid_from: validFrom,
+      source_bar_id: bar.barId,
+      annotated_at: new Date().toISOString()
+    };
+    if (eventType === "INVALIDATE") {
+      payload.invalidated_at = validFrom;
+      payload.invalidation_reason = "MANUAL_INVALIDATION";
+    }
+    state.pending = {
+      kind: "PROTECTED_POINT",
+      payload: payload,
+      summary: "Protected" + (direction === "HIGH" ? "High" : "Low") + " " +
+        price.toFixed(2) + " · " + eventType + " @ " + fmtTime(bar.time),
+      hint: "保护点事件保存为人工标注；15M 独立 ProtectedLow 会被拒绝。",
+      markers: [{
+        time: bar.time,
+        position: direction === "HIGH" ? "aboveBar" : "belowBar",
+        text: "待提交 Protected" + (direction === "HIGH" ? "High" : "Low")
+      }],
+      valid: true
+    };
+    renderPending();
+    refreshMarkers();
+  }
+
+  function handleStateIntervalClick(bar) {
+    if (!STATE_OPTIONS[state.tf]) {
+      setStatus("15M / 3M 没有独立趋势状态，不能标注状态区间");
+      return;
+    }
+    if (state.pendingClicks.length === 0) {
+      state.pendingClicks.push({ occurredBar: bar });
+      setStatus("已记录状态区间起点 " + fmtTime(bar.time) + "；请点击结束 Bar");
+      return;
+    }
+    var start = state.pendingClicks[0].occurredBar;
+    if (bar.time < start.time) {
+      setStatus("状态区间结束 Bar 不得早于开始 Bar");
+      return;
+    }
+    var selectedState = el.stateIntervalState.value || state.intervalState;
+    if (!selectedState) {
+      setStatus("请先选择区间状态");
+      return;
+    }
+    var validFrom = new Date(start.time * 1000).toISOString();
+    var validTo = new Date(bar.time * 1000).toISOString();
+    var knownAt = new Date((bar.closeTime || bar.time) * 1000).toISOString();
+    state.pending = {
+      kind: "STATE_INTERVAL",
+      payload: {
+        state: selectedState,
+        valid_from: validFrom,
+        valid_to: validTo,
+        known_at: knownAt,
+        reason_code: selectedState + "_MANUAL",
+        annotated_at: new Date().toISOString()
+      },
+      summary: state.tf + " " + selectedState + " · " + fmtTime(start.time) +
+        " → " + fmtTime(bar.time),
+      hint: "状态区间保存为 HUMAN_JUDGED 人工标注；known_at 取结束 Bar 的收盘确认时间。",
+      markers: [
+        { time: start.time, position: "belowBar", text: "状态开始 " + selectedState },
+        { time: bar.time, position: "belowBar", text: "状态结束" }
+      ],
+      valid: true
+    };
+    state.pendingClicks = [];
+    renderPending();
+    refreshMarkers();
   }
 
   function handleSwingClick(bar) {
@@ -709,6 +1299,7 @@
       state.pendingClicks = [];
       renderPending();
       refreshMarkers();
+      setStatus("已生成待提交 SwingPoint；确认无误后点击「保存草稿（DRAFT）」。");
     }
   }
 
@@ -771,8 +1362,36 @@
     });
   }
 
+  function renderAnnotationToolControls() {
+    if (el.nStructureStatusBox) {
+      el.nStructureStatusBox.className = state.tool === "nstructure"
+        ? "field inline" : "field inline hidden";
+    }
+    if (el.protectedEventBox) {
+      el.protectedEventBox.className = state.tool === "protected"
+        ? "field inline" : "field inline hidden";
+    }
+    if (!el.stateIntervalBox) return;
+    var options = STATE_OPTIONS[state.tf] || [];
+    var active = state.tool === "state" && options.length > 0;
+    el.stateIntervalBox.className = active ? "field inline" : "field inline hidden";
+    if (!active) return;
+    var current = el.stateIntervalState.value || state.intervalState;
+    el.stateIntervalState.textContent = "";
+    options.forEach(function (name) {
+      var option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      el.stateIntervalState.appendChild(option);
+    });
+    if (options.indexOf(current) < 0) current = options[0];
+    state.intervalState = current;
+    el.stateIntervalState.value = current;
+  }
+
   function renderAnchorPicker() {
     renderZoneModeControls();
+    renderAnnotationToolControls();
     var needsAnchors = state.tool === "zone" || state.tool === "nstructure";
     if (!needsAnchors) {
       el.anchorPicker.className = "anchor-picker hidden";
@@ -943,6 +1562,7 @@
           valid_from: nConfirmed,
           confirmed_at: nConfirmed,
           validation_status: "VALID",
+          status: el.nStructureStatus.value,
           invalidated_at: null,
           invalidation_status: "SPEC_AMBIGUITY",
           annotated_at: new Date().toISOString()
@@ -980,7 +1600,7 @@
       el.pendingAnnotation.appendChild(makeEl("div", "hint", state.pending.hint));
     }
     var ops = makeEl("div", "ops");
-    var submit = makeEl("button", null, "提交标注");
+    var submit = makeEl("button", null, "保存草稿（DRAFT）");
     submit.disabled = state.pending.valid === false;
     submit.addEventListener("click", submitPending);
     var cancel = makeEl("button", "ghost", "取消");
@@ -990,6 +1610,7 @@
       renderPending();
       renderAnchorPicker();
       refreshMarkers();
+      setStatus("已取消当前待提交标注", el.annotationStatus);
     });
     ops.appendChild(submit);
     ops.appendChild(cancel);
@@ -1043,14 +1664,23 @@
     }).then(function (annotation) {
       state.pending = null;
       state.pendingClicks = [];
+      state.savedCount += 1;
       renderPending();
       renderAnchorPicker();
       refreshMarkers();
-      setStatus("已创建标注 " + shortId(annotation.annotation_id), el.annotationStatus);
+      var message = "已保存为 DRAFT · " + shortId(annotation.annotation_id) +
+        "（本次会话 " + state.savedCount + " 条）";
+      setStatus(state.continuous ? message + "，可继续标注下一个" : message,
+        el.annotationStatus);
+      if (!state.continuous) {
+        var selectButton = document.querySelector('.tool[data-tool="select"]');
+        if (selectButton) selectButton.click();
+      }
       loadAnnotations();
+      loadProjectSummary();
       loadAudit();
     }).catch(function (error) {
-      setStatus("提交失败：" + error.message, el.annotationStatus);
+      setStatus("保存失败：" + error.message, el.annotationStatus);
     });
   }
 
@@ -1063,10 +1693,51 @@
       .then(function (data) {
         state.annotations = data.annotations || [];
         renderAnnotations();
+        drawManualAnnotations();
+        refreshMarkers();
       })
       .catch(function (error) {
         setStatus("标注加载失败：" + error.message, el.annotationStatus);
       });
+  }
+
+  function loadProjectSummary() {
+    if (!state.project) return Promise.resolve();
+    return api("/api/v1/annotation-projects/" + state.project.project_id + "/annotations")
+      .then(function (data) {
+        state.projectAnnotations = data.annotations || [];
+        renderProjectSummary();
+      })
+      .catch(function (error) {
+        setStatus("标注汇总加载失败：" + error.message, el.annotationStatus);
+      });
+  }
+
+  function renderProjectSummary() {
+    var counts = {};
+    state.projectAnnotations.forEach(function (item) {
+      counts[item.status] = (counts[item.status] || 0) + 1;
+    });
+    var groundTruth = (counts.APPROVED || 0) + (counts.FROZEN || 0);
+    state.groundTruthCount = groundTruth;
+    var names = ["DRAFT", "SUBMITTED", "REVIEWED", "APPROVED", "FROZEN",
+      "REJECTED", "AMBIGUOUS"];
+    var parts = names
+      .filter(function (name) { return counts[name]; })
+      .map(function (name) { return name + " " + counts[name]; });
+    if (el.annotationSummary) {
+      el.annotationSummary.textContent = "项目标注：" +
+        (parts.length ? parts.join(" · ") : "尚无标注") +
+        " · 可冻结 " + groundTruth;
+    }
+    var canFreeze = groundTruth > 0;
+    [el.freezeGolden, el.freezeGolden2].forEach(function (button) {
+      if (!button) return;
+      button.disabled = !canFreeze;
+      button.title = canFreeze
+        ? "把 APPROVED/FROZEN 标注冻结为黄金样本"
+        : "先保存草稿，并在标注列表中逐条提交审核、审核通过、批准，才能冻结";
+    });
   }
 
   function payloadSummary(annotation) {
@@ -1080,6 +1751,15 @@
       return "L1 " + shortId(payload.l1_swing_id) + " · H1 " + shortId(payload.h1_swing_id) +
         " · L2 " + shortId(payload.l2_swing_id) + " · H2 " + shortId(payload.h2_swing_id) +
         " · 失效 " + (payload.invalidation_status || "SPEC_AMBIGUITY");
+    }
+    if (annotation.entity_type === "STATE_INTERVAL") {
+      return payload.state + " · " + payload.valid_from + " → " +
+        (payload.valid_to || "—") + " · known " + (payload.known_at || "—");
+    }
+    if (annotation.entity_type === "PROTECTED_POINT") {
+      return "Protected" + (payload.direction === "HIGH" ? "High" : "Low") +
+        " " + payload.price + " · " + (payload.event_type || "INIT") +
+        " · " + payload.valid_from;
     }
     if (annotation.entity_type === "ZONE") {
       var mode = payload.annotation_mode || "";
@@ -1117,7 +1797,16 @@
         meta.appendChild(makeEl("span", "badge-source",
           payload.confirmation_policy || "HUMAN_JUDGED"));
       }
-      if (annotation.entity_type === "ZONE") {
+      if (annotation.entity_type === "STATE_INTERVAL") {
+      return payload.state + " · " + payload.valid_from + " → " +
+        (payload.valid_to || "—") + " · known " + (payload.known_at || "—");
+    }
+    if (annotation.entity_type === "PROTECTED_POINT") {
+      return "Protected" + (payload.direction === "HIGH" ? "High" : "Low") +
+        " " + payload.price + " · " + (payload.event_type || "INIT") +
+        " · " + payload.valid_from;
+    }
+    if (annotation.entity_type === "ZONE") {
         meta.appendChild(makeEl("span", "badge-source",
           payload.annotation_mode || "ANCHOR_ONLY"));
       }
@@ -1140,6 +1829,13 @@
         showRevisions(annotation.annotation_id);
       });
       actions.appendChild(revisions);
+      if (annotation.status !== "FROZEN") {
+        var remove = makeEl("button", "ghost", "删除");
+        remove.addEventListener("click", function () {
+          deleteAnnotation(annotation.annotation_id);
+        });
+        actions.appendChild(remove);
+      }
       li.appendChild(actions);
 
       el.annotationList.appendChild(li);
@@ -1153,9 +1849,25 @@
     }).then(function (updated) {
       setStatus("状态已更新为 " + updated.status, el.annotationStatus);
       loadAnnotations();
+      loadProjectSummary();
       loadAudit();
     }).catch(function (error) {
       setStatus("状态更新失败：" + error.message, el.annotationStatus);
+    });
+  }
+
+  function deleteAnnotation(annotationId) {
+    if (!window.confirm("确认删除该标注？软删除后仍可在审计日志中追溯。")) return;
+    api("/api/v1/annotations/" + annotationId, {
+      method: "DELETE",
+      body: { actor: "web", reason: "deleted from workbench" }
+    }).then(function () {
+      setStatus("已删除标注 " + shortId(annotationId), el.annotationStatus);
+      loadAnnotations();
+      loadProjectSummary();
+      loadAudit();
+    }).catch(function (error) {
+      setStatus("删除失败：" + error.message, el.annotationStatus);
     });
   }
 
@@ -1172,8 +1884,10 @@
 
   function updateComparisonControls() {
     var hasGolden = state.goldenDatasets.length > 0;
-    if (el.compareSwings) el.compareSwings.disabled = !hasGolden;
-    if (el.compareZones) el.compareZones.disabled = !hasGolden;
+    [el.compareSwings, el.compareZones, el.compareNStructures,
+      el.compareStateIntervals].forEach(function (button) {
+      if (button) button.disabled = !hasGolden;
+    });
     if (!hasGolden && el.comparisonStatus) {
       el.comparisonStatus.textContent = "尚未冻结黄金样本；DRAFT 标注不参与程序比较。";
     } else if (hasGolden && el.comparisonStatus &&
@@ -1207,6 +1921,9 @@
         " · HUMAN_ONLY " + (counts.HUMAN_ONLY || 0) +
         " · PROGRAM_ONLY " + (counts.PROGRAM_ONLY || 0) +
         " · AMBIGUOUS " + (counts.AMBIGUOUS_MATCH || counts.AMBIGUOUS || 0) +
+        " · EXACT " + (counts.EXACT_MATCH || 0) +
+        " · TIME_MISMATCH " + (counts.CONFIRMATION_TIME_MISMATCH || 0) +
+        " · STATUS_MISMATCH " + (counts.STATUS_MISMATCH || 0) +
         " · " + state.tf;
       el.comparisonOutput.textContent = JSON.stringify({
         golden_dataset_id: report.goldenDatasetId,
@@ -1372,6 +2089,9 @@
     state.tf = code;
     state.pending = null;
     state.pendingClicks = [];
+    // 切换周期重新加载整页视图后，向左加载的历史状态从零开始。
+    state.history.exhausted[code] = false;
+    state.history.loadedLeft[code] = 0;
     renderPending();
     renderAnchorPicker();
     renderTimeframeButtons();
@@ -1494,7 +2214,7 @@
     });
     if (needsReload) {
       state.live.appliedAt = Date.now();
-      loadPayload().then(function () {
+      loadPayload({ keepSelection: true }).then(function () {
         state.live.since = liveCursor(state.payload);
         loadAnnotations();
         updateLiveStatus("整页重载（新增超过 " + (data.maxLiveBars || 500) + " 根）");
@@ -1638,8 +2358,10 @@
     });
   }
 
-  function loadPayload() {
+  function loadPayload(options) {
+    var keepSelection = !!(options && options.keepSelection);
     return api("/api/v1/market/snapshot").then(function (payload) {
+      var previous = state.tf;
       state.payload = payload;
       renderMarket();
       renderCoverage(payload.coverage || []);
@@ -1647,8 +2369,15 @@
 
       var frames = payload.timeframes || [];
       var available = frames.filter(function (frame) { return frame.bars > 0; });
-      var target = available.some(function (frame) { return frame.code === "4H"; })
-        ? "4H" : (available.length ? available[available.length - 1].code : "4H");
+      // 实时刷新会整页重载：此时必须保留用户当前选中的周期，否则滚轮缩放/盘口
+      // 更新会把视图悄悄切到 4H。只有首次加载（或原周期已无数据）才重新选择。
+      var target;
+      if (keepSelection && available.some(function (frame) { return frame.code === previous; })) {
+        target = previous;
+      } else {
+        target = available.some(function (frame) { return frame.code === "4H"; })
+          ? "4H" : (available.length ? available[available.length - 1].code : "4H");
+      }
       state.tf = target;
       selectTimeframe(target);
       if (payload.skippedBars) {
@@ -1881,6 +2610,13 @@
 
   function freezeGolden() {
     if (!state.project) return;
+    if (!state.groundTruthCount) {
+      var hint = "没有 APPROVED/FROZEN 标注，不能冻结黄金样本。" +
+        "请先在标注列表中完成：保存草稿 → 提交审核 → 审核通过 → 批准。";
+      setStatus(hint, el.annotationStatus);
+      setStatus(hint, el.groundTruthHash);
+      return;
+    }
     var split = el.goldenSplit.value;
     api("/api/v1/golden-datasets", {
       method: "POST",
@@ -1892,6 +2628,7 @@
       setStatus(message, el.annotationStatus);
       // 冻结会把 APPROVED 同步转为 FROZEN，必须刷新标注列表才能看到新状态。
       loadAnnotations();
+      loadProjectSummary();
       loadGolden();
       loadAudit();
     }).catch(function (error) {
@@ -1939,6 +2676,150 @@
     });
   }
 
+  function exportAnnotations() {
+    if (!state.project) return;
+    api("/api/v1/annotation-projects/" + state.project.project_id + "/annotations")
+      .then(function (data) {
+        var payload = {
+          project_id: state.project.project_id,
+          spec_version: (state.meta && state.meta.specVersion) || "V1.4.8",
+          sacw_version: (state.meta && state.meta.sacwVersion) || "V1.1.2",
+          config_hash: state.meta && state.meta.configHash,
+          dataset_id: state.meta && state.meta.dataset && state.meta.dataset.datasetId,
+          exported_at: new Date().toISOString(),
+          annotation_count: data.count || 0,
+          annotations: data.annotations || []
+        };
+        var blob = new Blob([JSON.stringify(payload, null, 2)], {
+          type: "application/json"
+        });
+        var link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "sacw-annotations-" + state.project.project_id + ".json";
+        document.body.appendChild(link);
+        link.click();
+        window.setTimeout(function () {
+          URL.revokeObjectURL(link.href);
+          link.remove();
+        }, 0);
+        setStatus("已导出 " + (data.count || 0) + " 条标注 JSON", el.annotationStatus);
+      })
+      .catch(function (error) {
+        setStatus("导出失败：" + error.message, el.annotationStatus);
+      });
+  }
+
+  function latestGolden() {
+    return state.goldenDatasets.length
+      ? state.goldenDatasets[state.goldenDatasets.length - 1] : null;
+  }
+
+  function runReplay() {
+    if (!state.project) return;
+    var golden = latestGolden();
+    if (!golden) {
+      setStatus("需先冻结黄金样本，才能运行程序回放", el.replayStatus);
+      return;
+    }
+    setStatus("运行程序回放…", el.replayStatus);
+    api("/api/v1/replay-runs", {
+      method: "POST",
+      body: {
+        project_id: state.project.project_id,
+        golden_dataset_id: golden.golden_dataset_id,
+        timeframes: ["1M", "1W", "1D", "4H", "1H", "15M", "3M"],
+        mode: "BATCH_DETERMINISTIC"
+      }
+    }).then(function (run) {
+      el.replayStatus.textContent = "回放 " + run.run_id + " · " + run.status +
+        " · 事件 " + run.eventCount + " · baseline " + shortId(run.baselineReplayRunId);
+      el.replayOutput.textContent = JSON.stringify({
+        run_id: run.run_id,
+        status: run.status,
+        golden_dataset_id: run.goldenDatasetId,
+        baseline_replay_run_id: run.baselineReplayRunId,
+        config_hash: run.config_hash,
+        dataset_hash: run.dataset_hash,
+        event_counts: run.eventCounts,
+        event_count: run.eventCount
+      }, null, 2);
+      loadReplayRuns();
+    }).catch(function (error) {
+      setStatus("回放失败：" + error.message, el.replayStatus);
+    });
+  }
+
+  function loadReplayRuns() {
+    return api("/api/v1/replay-runs").then(function (data) {
+      var runs = data.runs || [];
+      if (el.replayStatus && !el.replayStatus.textContent.startsWith("回放 ")) {
+        el.replayStatus.textContent = "已有 " + runs.length + " 次回放";
+      }
+      return runs;
+    }).catch(function (error) {
+      setStatus("回放列表加载失败：" + error.message, el.replayStatus);
+    });
+  }
+
+  function saveSnapshotArtifact() {
+    var timeframe = el.snapshotTimeframe.value;
+    api("/api/v1/snapshots/artifacts", {
+      method: "POST",
+      body: { timeframe: timeframe }
+    }).then(function (artifact) {
+      el.snapshotOutput.textContent = JSON.stringify(artifact, null, 2).slice(0, 4000);
+      loadSnapshotArtifacts();
+    }).catch(function (error) {
+      el.snapshotOutput.textContent = "保存快照失败：" + error.message;
+    });
+  }
+
+  function loadSnapshotArtifacts() {
+    if (!el.snapshotArtifacts) return Promise.resolve();
+    return api("/api/v1/snapshots/artifacts").then(function (data) {
+      clear(el.snapshotArtifacts);
+      var items = data.snapshots || [];
+      if (!items.length) {
+        el.snapshotArtifacts.appendChild(makeEl("li", "empty", "尚未保存快照。"));
+        return;
+      }
+      items.slice().reverse().forEach(function (item) {
+        var li = makeEl("li");
+        var row = makeEl("div", "row");
+        row.appendChild(makeEl("span", "mono", shortId(item.snapshot_id)));
+        row.appendChild(makeEl("span", "status-" + item.status, item.status));
+        li.appendChild(row);
+        li.appendChild(makeEl("div", "mono",
+          (item.detail && item.detail.timeframe ? item.detail.timeframe : "—") +
+          " · " + String(item.snapshot_hash || "").slice(0, 12) +
+          " · " + item.created_at));
+        el.snapshotArtifacts.appendChild(li);
+      });
+    }).catch(function (error) {
+      setStatus("快照列表加载失败：" + error.message);
+    });
+  }
+
+  function runSelectedCase() {
+    if (!state.selectedCase) {
+      setStatus("请先选择一个 PB 样本", el.suiteMeta);
+      return;
+    }
+    setStatus("运行 " + state.selectedCase + "…", el.suiteMeta);
+    api("/api/v1/regression-cases/" + state.selectedCase + "/runs", {
+      method: "POST"
+    }).then(function (summary) {
+      state.suite = summary;
+      el.suiteMeta.textContent = "run " + summary.run_id + " · 通过 " +
+        summary.passed + " / 失败 " + summary.failed + " / 阻塞 " + summary.blocked;
+      renderCaseList();
+      renderCaseAssertions();
+      loadAudit();
+    }).catch(function (error) {
+      setStatus("样本运行失败：" + error.message, el.suiteMeta);
+    });
+  }
+
   function loadAudit() {
     return api("/api/v1/audit-logs?limit=60").then(function (data) {
       clear(el.auditList);
@@ -1975,7 +2856,25 @@
           }, 30);
         }
         if (tab.dataset.tab === "regression" && !state.cases.length) loadCases();
-        if (tab.dataset.tab === "dataset") { loadGolden(); loadAudit(); }
+        if (tab.dataset.tab === "dataset") {
+          loadGolden(); loadAudit(); loadSnapshotArtifacts(); loadReplayRuns();
+        }
+      });
+    });
+  }
+
+  function bindPanelTabs() {
+    var tabs = document.querySelectorAll(".panel-tab");
+    Array.prototype.forEach.call(tabs, function (tab) {
+      tab.addEventListener("click", function () {
+        Array.prototype.forEach.call(tabs, function (other) {
+          other.classList.remove("active");
+        });
+        tab.classList.add("active");
+        ["annotate", "structure", "compare"].forEach(function (name) {
+          var view = $("panel-" + name);
+          if (view) view.classList.toggle("active", name === tab.dataset.panel);
+        });
       });
     });
   }
@@ -1989,6 +2888,13 @@
         });
         button.classList.add("active");
         state.tool = button.dataset.tool;
+        if (el.currentTool) {
+          var labels = {
+            select: "选择", swing: "Swing", nstructure: "N 结构", zone: "Zone",
+            protected: "保护点", state: "状态区间"
+          };
+          el.currentTool.textContent = "当前：" + (labels[state.tool] || state.tool);
+        }
         state.pending = null;
         state.pendingClicks = [];
         renderPending();
@@ -1998,7 +2904,9 @@
           select: "选择模式：点击 Bar 查看该 Bar 的指标与快照位置。",
           swing: "Swing 工具：第一次点击选择发生 Bar，第二次点击选择确认 Bar。",
           nstructure: "N 结构工具：依次点击 L1、H1、L2、H2 四个已确认摆动点。",
-          zone: "Zone 工具：点击至少两个同向已确认摆动点，边界由后端计算。"
+          zone: "Zone 工具：点击至少两个同向已确认摆动点，边界由后端计算。",
+          protected: "保护点工具：点击一根 Bar 记录 ProtectedLow/ProtectedHigh 事件；15M 独立保护点会被拒绝。",
+          state: "状态区间工具：先选择状态，再点击开始 Bar 和结束 Bar。"
         };
         el.toolHint.textContent = hints[state.tool] || "";
       });
@@ -2030,6 +2938,16 @@
     el.toggleLevels.addEventListener("change", function (event) {
       state.toggles.levels = event.target.checked; applyToggles();
     });
+    el.toggleManual.addEventListener("change", function (event) {
+      state.toggles.manual = event.target.checked; applyToggles();
+    });
+    if (el.viewReset) el.viewReset.addEventListener("click", resetViewport);
+    if (el.viewFit) el.viewFit.addEventListener("click", fitAll);
+    document.addEventListener("keydown", function (event) {
+      var tag = (event.target && event.target.tagName) || "";
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (event.key === "r" || event.key === "R") resetViewport();
+    });
     el.clearAnchors.addEventListener("click", function () {
       state.pendingClicks = [];
       updateAnchorPending();
@@ -2044,6 +2962,18 @@
         if (state.tool === "zone") updateAnchorPending();
       });
     });
+    el.protectedEventType.addEventListener("change", function (event) {
+      state.protectedEventType = event.target.value;
+    });
+    el.stateIntervalState.addEventListener("change", function (event) {
+      state.intervalState = event.target.value;
+    });
+    el.continuousAnnotation.addEventListener("change", function (event) {
+      state.continuous = event.target.checked;
+      setStatus(state.continuous
+        ? "连续标注已开启：保存草稿后保持当前工具"
+        : "连续标注已关闭：保存草稿后回到选择模式", el.annotationStatus);
+    });
     el.refreshAnnotations.addEventListener("click", function () {
       loadAnnotations(); loadAudit();
     });
@@ -2051,6 +2981,17 @@
     el.freezeGolden2.addEventListener("click", freezeGolden);
     el.compareSwings.addEventListener("click", function () { runComparison("swings"); });
     el.compareZones.addEventListener("click", function () { runComparison("zones"); });
+    el.compareNStructures.addEventListener("click", function () {
+      runComparison("n-structures");
+    });
+    el.compareStateIntervals.addEventListener("click", function () {
+      runComparison("state-intervals");
+    });
+    el.exportAnnotations.addEventListener("click", exportAnnotations);
+    el.runReplay.addEventListener("click", runReplay);
+    el.refreshReplay.addEventListener("click", loadReplayRuns);
+    el.saveSnapshot.addEventListener("click", saveSnapshotArtifact);
+    el.runCase.addEventListener("click", runSelectedCase);
     el.atrSnapshotField.addEventListener("change", function () {
       updateAtrSnapshotInspector(state.selectedBar, null, null);
     });
@@ -2091,17 +3032,35 @@
       anchorPicker: $("anchor-picker"),
       anchorChips: $("anchor-chips"),
       clearAnchors: $("clear-anchors"),
+      continuousAnnotation: $("continuous-annotation"),
       zoneModeBox: $("zone-mode-box"),
       zoneMode: $("zone-mode"),
       zoneHumanFields: $("zone-human-fields"),
       zoneHumanLower: $("zone-human-lower"),
       zoneHumanUpper: $("zone-human-upper"),
       zoneHumanCenter: $("zone-human-center"),
+      nStructureStatusBox: $("n-structure-status-box"),
+      nStructureStatus: $("n-structure-status"),
+      protectedEventBox: $("protected-event-box"),
+      protectedEventType: $("protected-event-type"),
+      stateIntervalBox: $("state-interval-box"),
+      stateIntervalState: $("state-interval-state"),
+      compareNStructures: $("compare-n-structures"),
+      compareStateIntervals: $("compare-state-intervals"),
+      exportAnnotations: $("export-annotations"),
+      replayStatus: $("replay-status"),
+      replayOutput: $("replay-output"),
+      runReplay: $("run-replay"),
+      refreshReplay: $("refresh-replay"),
+      saveSnapshot: $("save-snapshot"),
+      snapshotArtifacts: $("snapshot-artifacts"),
+      runCase: $("run-case"),
       comparisonStatus: $("comparison-status"),
       comparisonOutput: $("comparison-output"),
       compareSwings: $("compare-swings"),
       compareZones: $("compare-zones"),
       annotationStatus: $("annotation-status"),
+      annotationSummary: $("annotation-summary"),
       auditList: $("audit-list"),
       goldenList: $("golden-list"),
       goldenSplit: $("golden-split"),
@@ -2116,6 +3075,7 @@
       canHold: $("can-hold"),
       macroSummary: $("macro-summary"),
       toolHint: $("tool-hint"),
+      currentTool: $("current-tool"),
       nInvalidationNotice: $("n-invalidation-notice"),
       atrSnapshotField: $("atr-snapshot-field"),
       atrSnapshot: $("atr-snapshot"),
@@ -2141,6 +3101,9 @@
       toggleZone: $("toggle-zone"),
       toggleStructure: $("toggle-structure"),
       toggleLevels: $("toggle-levels"),
+      viewReset: $("view-reset"),
+      viewFit: $("view-fit"),
+      toggleManual: $("toggle-manual"),
       refreshAnnotations: $("refresh-annotations"),
       freezeGolden: $("freeze-golden"),
       freezeGolden2: $("freeze-golden-2"),
@@ -2162,6 +3125,7 @@
     el.snapshotTimeframe.value = "4H";
 
     bindTabs();
+    bindPanelTabs();
     bindTools();
     bindControls();
     bindResizeOnce();
@@ -2169,13 +3133,17 @@
 
     loadMeta()
       .then(loadProjects)
-      .then(loadPayload)
+      // 显式调用：直接传函数会把上一步返回值当作 options 传入。
+      .then(function () { return loadPayload(); })
       .then(function () {
         state.live.since = liveCursor(state.payload);
         updateLiveStatus();
         scheduleLive();
         loadCases();
+        loadProjectSummary();
         loadGolden();
+        loadSnapshotArtifacts();
+        loadReplayRuns();
         loadAudit();
       })
       .catch(function (error) {
@@ -2194,7 +3162,14 @@
         annotations: state.annotations.length,
         suite: state.suite ? state.suite.run_id : null,
         priceLines: state.priceLines.length,
-        overlays: state.overlays.length
+        overlays: state.overlays.length,
+        candles: (currentSection() && currentSection().candles || []).length,
+        candleTimes: (currentSection() && currentSection().candles || []).map(
+          function (item) { return item.time; }
+        ),
+        visibleRange: state.priceChart
+          ? state.priceChart.timeScale().getVisibleLogicalRange()
+          : null
       };
     }
   };

@@ -51,7 +51,13 @@ def test_snapshot_contains_zone_parameters_and_config_hash() -> None:
     assert payload["market"]["tick_size"] == "0.01"
     assert payload["config_hash"]
     assert payload["indicators"]["atr_ma22"] == "N/A / SPEC_AMBIGUITY"
-    assert payload["state_machines"] is None
+    state_machines = payload["state_machines"]
+    assert state_machines["states"]["4H"] in {
+        "TREND_UP", "TREND_DOWN", "PULLBACK", "RANGE", "TRANSITION", "UNKNOWN"
+    }
+    assert state_machines["states"]["15M"] is None
+    assert isinstance(state_machines["canOpen"], bool)
+    assert isinstance(state_machines["canHold"], bool)
     assert payload["position"] is None
     assert result.snapshot_hash
 

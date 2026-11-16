@@ -439,3 +439,267 @@ def test_15m_protected_point_is_rejected(router: ApiRouter) -> None:
     )
     assert status == 400
     assert envelope["error"]["code"] == "PROTECTED_POINT_15M_NOT_ALLOWED"
+
+
+def _approve(router: ApiRouter, annotation_id: str) -> None:
+    for target in ("SUBMITTED", "REVIEWED", "APPROVED"):
+        status, envelope = _post(
+            router,
+            f"/api/v1/annotations/{annotation_id}/status",
+            {"status": target, "actor": "test"},
+        )
+        assert status == 200, envelope
+
+
+def _freeze(router: ApiRouter, project_id: str, split: str = "HOLDOUT") -> dict:
+    status, envelope = _post(
+        router,
+        "/api/v1/golden-datasets",
+        {"project_id": project_id, "split": split, "actor": "test"},
+    )
+    assert status == 200, envelope
+    return envelope["data"]
+
+
+def test_state_interval_and_protected_point_validation(router: ApiRouter) -> None:
+    """StateInterval 状态必须匹配周期；ProtectedPoint 15M 拒绝、4H 接受。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations",
+        {
+            "entity_type": "STATE_INTERVAL",
+            "timeframe": "4H",
+            "payload": {
+                "state": "TREND_UP",
+                "valid_from": "2026-01-01T00:00:00Z",
+                "valid_to": "2026-01-02T00:00:00Z",
+                "known_at": "2026-01-01T04:00:00Z",
+                "reason_code": "MANUAL_TREND",
+            },
+            "actor": "test",
+        },
+    )
+    assert status == 200, envelope
+
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations",
+        {
+            "entity_type": "STATE_INTERVAL",
+            "timeframe": "4H",
+            "payload": {
+                "state": "BULLISH",
+                "valid_from": "2026-01-01T00:00:00Z",
+                "known_at": "2026-01-01T04:00:00Z",
+                "reason_code": "BAD_STATE",
+            },
+            "actor": "test",
+        },
+    )
+    assert status == 400
+    assert envelope["error"]["code"] == "INVALID_STATE_VALUE"
+
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations",
+        {
+            "entity_type": "STATE_INTERVAL",
+            "timeframe": "15M",
+            "payload": {
+                "state": "BULLISH",
+                "valid_from": "2026-01-01T00:00:00Z",
+                "known_at": "2026-01-01T00:15:00Z",
+                "reason_code": "NO_15M_STATE",
+            },
+            "actor": "test",
+        },
+    )
+    assert status == 400
+    assert envelope["error"]["code"] == "STATE_INTERVAL_TIMEFRAME_NOT_ALLOWED"
+
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations",
+        {
+            "entity_type": "PROTECTED_POINT",
+            "timeframe": "4H",
+            "payload": {
+                "direction": "LOW",
+                "price": "2400.0",
+                "valid_from": "2026-01-01T00:00:00Z",
+                "event_type": "INIT",
+            },
+            "actor": "test",
+        },
+    )
+    assert status == 200, envelope
+
+
+def test_annotation_revision_conflict_and_delete(router: ApiRouter) -> None:
+    """PATCH 使用乐观锁；DELETE 软删除后不再出现在列表。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    annotation = _create_swing(router, project_id)
+    annotation_id = annotation["annotation_id"]
+
+    payload = {
+        "direction": "LOW",
+        "price": "2401.0",
+        "occurred_at": "2026-01-01T00:00:00Z",
+        "confirmed_at": "2026-01-01T04:00:00Z",
+    }
+    # PATCH 走 router.dispatch，使用乐观锁。
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(f"/api/v1/annotations/{annotation_id}")
+    status, envelope = router.dispatch(
+        method="PATCH",
+        path=parsed.path,
+        query=parse_qs(parsed.query),
+        body={"payload": payload, "expected_revision": 9, "actor": "test"},
+    )
+    assert status == 409
+    assert envelope["error"]["code"] == "REVISION_CONFLICT"
+
+    status, envelope = router.dispatch(
+        method="PATCH",
+        path=parsed.path,
+        query=parse_qs(parsed.query),
+        body={"payload": payload, "expected_revision": 1, "actor": "test"},
+    )
+    assert status == 200, envelope
+    assert envelope["data"]["revision"] == 2
+
+    status, envelope = router.dispatch(
+        method="DELETE",
+        path=parsed.path,
+        query=parse_qs(parsed.query),
+        body={"actor": "test", "reason": "cleanup"},
+    )
+    assert status == 200, envelope
+    status, envelope = _get(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations?timeframe=4H",
+    )
+    assert all(item["annotation_id"] != annotation_id for item in envelope["data"]["annotations"])
+
+
+def test_golden_validate_and_explicit_split(router: ApiRouter) -> None:
+    """黄金样本可校验，并登记显式区间切分。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    annotation = _create_swing(router, project_id)
+    _approve(router, annotation["annotation_id"])
+    golden = _freeze(router, project_id)
+    golden_id = golden["golden_dataset_id"]
+
+    status, envelope = _post(router, f"/api/v1/golden-datasets/{golden_id}/validate")
+    assert status == 200, envelope
+    assert envelope["data"]["valid"] is True
+
+    status, envelope = _post(
+        router,
+        f"/api/v1/golden-datasets/{golden_id}/split",
+        {
+            "split": "VALIDATION",
+            "range_start": "2026-01-01T00:00:00Z",
+            "range_end": "2026-02-01T00:00:00Z",
+        },
+    )
+    assert status == 200, envelope
+    split = envelope["data"]
+    assert split["annotation_hash"] == golden["annotation_hash"]
+
+    status, envelope = _get(
+        router,
+        f"/api/v1/market/datasets/{split['dataset_id']}/splits",
+    )
+    assert status == 200
+    assert envelope["data"]["splits"]
+
+
+def test_replay_run_persists_program_events(router: ApiRouter) -> None:
+    """冻结后可运行程序回放并读取持久化结构事件。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    annotation = _create_swing(router, project_id)
+    _approve(router, annotation["annotation_id"])
+    golden = _freeze(router, project_id)
+
+    status, envelope = _post(
+        router,
+        "/api/v1/replay-runs",
+        {
+            "project_id": project_id,
+            "golden_dataset_id": golden["golden_dataset_id"],
+            "timeframes": ["4H"],
+            "mode": "BATCH_DETERMINISTIC",
+        },
+    )
+    assert status == 200, envelope
+    run = envelope["data"]
+    assert run["status"] == "COMPLETED"
+    assert run["eventCount"] > 0
+    assert run["eventCounts"]["4H"] > 0
+
+    status, envelope = _get(router, f"/api/v1/replay-runs/{run['run_id']}/events")
+    assert status == 200
+    assert envelope["data"]["count"] > 0
+    event_types = {item["event_type"] for item in envelope["data"]["events"]}
+    assert {"SWING_POINT", "ZONE", "STATE"} <= event_types
+
+
+def test_snapshot_artifact_can_be_saved_and_listed(router: ApiRouter) -> None:
+    """快照 artifact 通过 API 持久化，并包含状态机。"""
+    status, envelope = _post(
+        router,
+        "/api/v1/snapshots/artifacts",
+        {"timeframe": "4H"},
+    )
+    assert status == 200, envelope
+    artifact = envelope["data"]
+    assert artifact["status"] in {"READY", "INSUFFICIENT_HISTORY", "INVALID_ATR"}
+    assert artifact["detail"]["payload"]["state_machines"]["states"]["4H"] is not None
+
+    status, envelope = _get(router, "/api/v1/snapshots/artifacts")
+    assert status == 200
+    assert envelope["data"]["count"] >= 1
+
+
+def test_state_interval_comparison_uses_frozen_ground_truth(router: ApiRouter) -> None:
+    """状态区间比较只读取冻结标注，并返回程序区间匹配结果。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations",
+        {
+            "entity_type": "STATE_INTERVAL",
+            "timeframe": "4H",
+            "payload": {
+                "state": "TREND_DOWN",
+                "valid_from": "2026-01-01T00:00:00Z",
+                "valid_to": "2026-01-05T00:00:00Z",
+                "known_at": "2026-01-05T04:00:00Z",
+                "reason_code": "MANUAL_TREND",
+            },
+            "actor": "test",
+        },
+    )
+    assert status == 200, envelope
+    annotation_id = envelope["data"]["annotation_id"]
+    _approve(router, annotation_id)
+    golden = _freeze(router, project_id)
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/comparisons/state-intervals"
+        f"?timeframe=4H&golden_dataset_id={golden['golden_dataset_id']}",
+    )
+    assert status == 200, envelope
+    report = envelope["data"]
+    assert report["human_count"] == 1
+    assert report["program_count"] >= 1
+    assert report["comparisonId"]
+    assert report["results"]

@@ -24,7 +24,7 @@ PYTHONPATH=src $VENV scripts/validate_data.py --help
 ### 测试与规范
 
 ```bash
-PYTHONPATH=src $VENV -m pytest -q      # 期望 327 passed
+PYTHONPATH=src $VENV -m pytest -q      # 期望 333 passed
 PYTHONPATH=src $VENV -m ruff check .   # 期望 All checks passed
 ```
 
@@ -87,18 +87,21 @@ PYTHONPATH=src $VENV scripts/run_collector.py --proxy-url http://172.21.192.1:78
 采集器会一次订阅并回补**七个周期**。各周期默认回补区间不同（分钟级只回补较短区间），
 定义在 `collector.DEFAULT_BOOTSTRAP_DAYS`：
 
-| 周期 | 默认天数 | 单次请求周期数 |
-| --- | ---: | ---: |
-| 1M | 1825 | 300 |
-| 1W | 1095 | 300 |
-| 1D | 365 | 300 |
-| 4H | 120 | 300 |
-| 1H | 30 | 300 |
-| 15M | 7 | 100 |
-| 3M | 2 | 100 |
+| 周期 | 默认天数 | 约合根数 | 单次请求周期数 |
+| --- | ---: | ---: | ---: |
+| 1M | 2190（6 年） | 71 | 300 |
+| 1W | 2190（6 年） | 312 | 300 |
+| 1D | 2190（6 年） | 2189 | 300 |
+| 4H | 1095（3 年） | 6570 | 300 |
+| 1H | 365（1 年） | 8760 | 300 |
+| 15M | 90 | 8640 | 100 |
+| 3M | 30 | 14401 | 100 |
 
-实测一次完整回补约 30 秒，得到：1M 59 / 1W 156 / 1D 364 / 4H 720 / 1H 720 /
-15M 673 / 3M 961 根。
+大周期补齐到合约上线（OKX ETH-USDT-SWAP 始于 2020-09）；分钟级刻意只保留近期区间，
+因为 3M 全量约 108 万根、需要上万次分页请求，既拖慢首次启动也更容易触发限频。
+
+实测七周期全量落盘约 **1.7 MB**、约 2 分钟。**扩大范围后无需删库**：启动时会自动比较
+第一根已存 K 线与目标起点，缺多少向前补多少（见 3.1）。重复启动不会重复请求。
 
 `Ctrl+C` 停止；已收盘数据由 10 秒定时器落盘。
 
@@ -110,6 +113,7 @@ PYTHONPATH=src $VENV scripts/run_collector.py --proxy-url http://172.21.192.1:78
 | --- | --- |
 | 首次运行（catalog 为空） | 按上表的天数回补历史，然后进入实时订阅 |
 | 重启（catalog 已有数据） | 从「最后一根已存 K 线的下一期」往前回退 3 期续采，**停机期间产生的 K 线全部补齐** |
+| 已有数据但历史不够深 | 比较第一根已存 K 线与目标起点，自动向前补齐到上表的回补深度（调大天数后重启即可生效，无需删库） |
 | 已存历史中间的缺口 | 启动时扫描时间戳，逐段请求补齐（续采只往后补，靠这一步修复中间缺口） |
 | 正常收盘 | 每个周期在自己的收盘时刻后补拉一次历史接口，覆盖 WebSocket 漏推 |
 | 断线重连 | 收到 `DISCONNECTED` → `CONNECTED` 后对全部周期重新回补 |
@@ -272,6 +276,17 @@ PYTHONPATH=src $VENV scripts/serve_chart.py --port 8788
 
 顶栏实时徽章显示最近更新时刻与追加根数，点击可暂停/恢复轮询。
 
+#### 长周期视野与向左滚动加载
+
+整页载荷对每个周期只带**最近 1200 根**（`MAX_SERIES_BARS`）。实测每周期 5000 根时
+整页约 21 MB、1200 根时约 6 MB，首屏明显更快。
+其余历史按需加载：把图表拖到最左侧时，前端自动调用
+`GET /api/v1/market/bars?timeframe=4H&to=<最早一根>&limit=1000` 再往前取一页并前插，
+视野保持不动；加载完更早的全部数据后才提示“已加载到最早一根 K 线”。
+
+切到其他周期会重置该周期的加载状态。指标与叠加层始终来自服务端最新一版计算，
+向前加载只补充 K 线与成交量。
+
 先启动采集器、再启动工作台即可；两者顺序无关，工作台每次轮询都会读取磁盘上
 的最新数据。
 
@@ -310,9 +325,19 @@ curl -s "localhost:8787/api/v1/market/live" | python3 -m json.tool | head -20
 | Swing | 第一次点击选发生 Bar，第二次点击选确认 Bar；价格默认取该 Bar 的 High/Low | `SWING_POINT`（区分 `occurred_at` / `confirmed_at`，默认 `confirmation_policy=HUMAN_JUDGED`） |
 | N 结构 | 依次选 L1 → H1 → L2 → H2 四个已确认摆动点 | `N_STRUCTURE`（前端先校验顺序与 `L2>L1`、`H2>H1`；失效字段标记 `SPEC_AMBIGUITY`） |
 | Zone | 选 ≥2 个**同向**摆动点，再选 `ANCHOR_ONLY` 或 `HUMAN_BOUNDARY` | `ZONE`（ANCHOR_ONLY 边界由后端计算；HUMAN_BOUNDARY 人工边界与程序边界分开保存） |
+| 保护点 | 点击 Bar，选择 `INIT / UPDATE / INVALIDATE` | `PROTECTED_POINT`（15M 独立 ProtectedLow 被拒绝） |
+| 状态区间 | 先选状态，再点击开始 Bar 与结束 Bar | `STATE_INTERVAL`（`valid_from` / `valid_to` / `known_at` / `reason_code`） |
 
 右侧「锚点候选」面板列出本周期已确认摆动点，点击即选中（比在图上点更精确），
-也可直接在图上点击。选中后底部显示待提交对象，点「提交标注」入库。
+也可直接在图上点击。选中后底部显示待提交对象，点「**保存草稿（DRAFT）**」入库。
+
+**保存与连续标注**：保存成功后当前工具保持不变，可直接开始下一个对象；标注面板
+上方可取消「保存后继续标注」以在保存后回到选择模式。页面内「使用说明」列出了
+全部工具的连续标注步骤。图层复选框只控制显示，不进入标注。
+
+标注列表支持软删除（`DELETE /annotations/{id}`，FROZEN 不可删）和导出 JSON。
+「人工标注」图层把已保存的 Swing / Zone / N 结构 / 保护点 / 状态区间叠加到图上，
+与程序结构分开显示。
 
 **保存后一律是 `DRAFT`，不是 Ground Truth。** 前端不会在保存时调用策略引擎
 “核对标注是否正确”；程序只会在黄金样本冻结之后，用 V1.4.8 引擎回放同一段数据，
@@ -356,6 +381,8 @@ DRAFT → SUBMITTED → REVIEWED → APPROVED → FROZEN
 3. 把参与冻结的标注加入黄金样本成员清单，并将 `APPROVED` 同步转为 `FROZEN`。
 
 冻结后刷新标注列表即可看到 `FROZEN` 状态；冻结版不可原地修改，修订会创建新版本。
+标注面板会显示项目级状态汇总（DRAFT / SUBMITTED / REVIEWED / APPROVED / FROZEN）；
+没有 APPROVED/FROZEN 时「冻结黄金样本」按钮保持禁用，避免误点后返回 400。
 
 ### 6.4 差异比较
 
@@ -377,7 +404,18 @@ PID=$(curl -s localhost:8787/api/v1/annotation-projects | python3 -c "import jso
 GOLD=$(curl -s localhost:8787/api/v1/golden-datasets | python3 -c "import json,sys;print(json.load(sys.stdin)['data']['goldenDatasets'][-1]['golden_dataset_id'])")
 curl -s -X POST "localhost:8787/api/v1/annotation-projects/$PID/comparisons/swings?timeframe=4H&golden_dataset_id=$GOLD"
 curl -s -X POST "localhost:8787/api/v1/annotation-projects/$PID/comparisons/zones?timeframe=4H&golden_dataset_id=$GOLD"
+curl -s -X POST "localhost:8787/api/v1/annotation-projects/$PID/comparisons/n-structures?timeframe=4H&golden_dataset_id=$GOLD"
+curl -s -X POST "localhost:8787/api/v1/annotation-projects/$PID/comparisons/state-intervals?timeframe=4H&golden_dataset_id=$GOLD"
 ```
+
+N 结构比较先用冻结的人工 Swing 与程序 Swing 建立映射，再比较四锚点、确认时间
+和结构状态。状态区间比较按状态与时间重叠匹配人工/程序区间；逐 Bar 混淆矩阵和
+Macro-F1 尚未实现。每次比较写入 `comparison_runs` / `match_results`，可用
+`GET /comparisons` 与 `GET /comparisons/{id}` 追溯。
+
+**程序回放**：`POST /replay-runs` 会绑定冻结黄金样本的 baseline，回放七周期结构
+事件并持久化到 `program_events`；支持 `GET /replay-runs[/{id}][/events][/snapshots]`
+与 `POST /replay-runs/{id}/cancel`。前端「程序回放」区域可直接运行并查看事件数。
 
 Swing 采用**全局最小代价一对一匹配**（匈牙利算法），输出
 `MATCHED / HUMAN_ONLY / PROGRAM_ONLY / AMBIGUOUS_MATCH` 以及
@@ -412,6 +450,8 @@ curl -s -X POST localhost:8787/api/v1/regression-suites/v1-4-8/run | python3 -m 
 - 每次运行生成 `regression_run_id`，与 `code_commit`、`config_hash`、
   `dataset_hash`、`expectation_revision` 绑定；断言逐条落库，可在
   `/api/v1/regression-runs/{run_id}/assertions` 复读。
+- 前端样本详情新增「运行当前样本」，调用
+  `POST /api/v1/regression-cases/{case_id}/runs`，无需重跑全套。
 
 ---
 
@@ -425,8 +465,11 @@ curl -s -X POST localhost:8787/api/v1/regression-suites/v1-4-8/run | python3 -m 
   两者都会写进标注、快照与回归记录。
 - **初始状态快照**：`GET /api/v1/snapshots?timeframe=4H`，含 ATR/SMA/ZigZag/
   Swing/N 结构/Zone 与 `zone_parameters`（3 个入选参数 + 其余 Zone 参数），
-  状态为 `READY / INSUFFICIENT_HISTORY / INVALID_ATR`。状态机、持仓与订单字段
-  在 P1 前保持 `null`，不伪造。
+  状态为 `READY / INSUFFICIENT_HISTORY / INVALID_ATR`。已实现的
+  1M/1W/1D/4H/1H 状态机与 `CanOpen`/`CanHold` 写入 `state_machines`；
+  持仓与订单仍为 `null`。
+- **保存快照**：`POST /api/v1/snapshots/artifacts` 把快照哈希与元数据写入
+  `snapshot_artifacts`，`GET /api/v1/snapshots/artifacts` 可列出。
 - **黄金样本冻结**：`POST /api/v1/golden-datasets`（`CALIBRATION` /
   `VALIDATION` / `HOLDOUT`），返回 `annotation_hash` 与参与数量。
 
@@ -504,7 +547,7 @@ A: `nautilus_pa/var/sacw.sqlite3`，已在 `.gitignore` 中。可用 `--store` �
 ## 11. 可复现验证
 
 ```bash
-# 单元 + 集成测试（327 项）
+# 单元 + 集成测试（333 项）
 PYTHONPATH=src $VENV -m pytest -q
 
 # 静态检查

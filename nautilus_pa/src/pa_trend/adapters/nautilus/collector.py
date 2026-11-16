@@ -65,15 +65,18 @@ BARS_PER_REQUEST: dict[Timeframe, int] = {
     Timeframe.MIN3: 100,
 }
 
-#: 目录为空时各周期默认回补的天数（分钟级只回补较短区间）。
+#: 目录为空时各周期默认回补的天数。
+#:
+#: 大周期补齐到合约上线（OKX ETH-USDT-SWAP 始于 2020-09），分钟级只回补近期区间：
+#: 3M 全量约 108 万根、上万次分页请求，既拖慢首次启动也更容易触发交易所限频。
 DEFAULT_BOOTSTRAP_DAYS: dict[Timeframe, int] = {
-    Timeframe.MONTH: 365 * 5,
-    Timeframe.WEEK: 365 * 3,
-    Timeframe.DAY: 365,
-    Timeframe.HOUR4: 120,
-    Timeframe.HOUR1: 30,
-    Timeframe.MIN15: 7,
-    Timeframe.MIN3: 2,
+    Timeframe.MONTH: 365 * 6,
+    Timeframe.WEEK: 365 * 6,
+    Timeframe.DAY: 365 * 6,
+    Timeframe.HOUR4: 365 * 3,
+    Timeframe.HOUR1: 365,
+    Timeframe.MIN15: 90,
+    Timeframe.MIN3: 30,
 }
 
 #: 重启续采时最少回看的周期数。
@@ -207,6 +210,7 @@ class MultiTimeframeBarCollector(DataActor):
             self.subscribe_bars(bar_type)
             try:
                 self._request_backfill(bar_type, self._resume_start(key), now)
+                self._extend_history_backwards(bar_type, now)
                 self._request_historical_gaps(bar_type, now)
             except Exception:
                 # 单个周期回补失败不能让其余周期失去订阅与回补机会。
@@ -237,6 +241,33 @@ class MultiTimeframeBarCollector(DataActor):
             add_periods(first_missing, timeframe, -RESUME_LOOKBACK_PERIODS),
             timeframe,
         )
+
+    def _extend_history_backwards(self, bar_type: BarType, now: datetime) -> None:
+        """把已存历史向前补齐到 :data:`DEFAULT_BOOTSTRAP_DAYS` 覆盖的回补深度。
+
+        续采只从**最后一根**往后补，所以调大回补天数对已有目录不会生效。这里
+        比较第一根已存 K 线的开盘时刻与目标起点，缺多少补多少；已经够深时
+        什么都不请求，重复启动不会产生额外流量。
+        """
+        key = str(bar_type)
+        timeframe = self._timeframes[key]
+        known = self._known_ts[key]
+        if not known:
+            return
+
+        days = self._bootstrap_days.get(timeframe, 0)
+        if days <= 0:
+            return
+        target = floor_to_boundary(now - timedelta(days=days), timeframe)
+        earliest = ns_to_dt(min(known))
+        if target >= earliest:
+            return
+
+        self.log.info(
+            f"Extending history: bar_type={key} "
+            f"from={earliest.isoformat()} target={target.isoformat()}",
+        )
+        self._request_backfill(bar_type, target, earliest, now=now)
 
     def _request_historical_gaps(self, bar_type: BarType, now: datetime) -> None:
         """重启时补齐已存历史中间的缺口。

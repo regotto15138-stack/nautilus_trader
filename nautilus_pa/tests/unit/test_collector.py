@@ -22,10 +22,11 @@ import pytest
 from helpers import INSTRUMENT_ID
 from pa_trend.adapters.nautilus.collector import (
     BARS_PER_REQUEST,
+    DEFAULT_BOOTSTRAP_DAYS,
     RESUME_LOOKBACK_PERIODS,
     MultiTimeframeBarCollector,
 )
-from pa_trend.domain.models.timeframe import Timeframe, dt_to_ns
+from pa_trend.domain.models.timeframe import Timeframe, dt_to_ns, floor_to_boundary
 
 OPEN_15M = datetime(2026, 11, 16, 6, 30, tzinfo=UTC)
 MIN15_KEY = f"{INSTRUMENT_ID}-15-MINUTE-LAST-EXTERNAL"
@@ -276,13 +277,14 @@ class TestResumeStart:
     """重启续采起点必须覆盖全部停机缺口，而不是只回退两期。"""
 
     def test_empty_catalog_uses_bootstrap_days(self) -> None:
-        now = OPEN_15M + timedelta(days=30)
+        now = OPEN_15M + timedelta(days=120)
         collector, _ = _make_collector(now=now)
+        collector._bootstrap_days = dict(DEFAULT_BOOTSTRAP_DAYS)
 
         start = collector._resume_start(MIN15_KEY)
 
-        # 15M 默认回补 7 天。
-        assert start == OPEN_15M + timedelta(days=23)
+        # 15M 默认回补 90 天。
+        assert start == floor_to_boundary(now - timedelta(days=90), Timeframe.MIN15)
 
     def test_short_restart_keeps_a_safety_margin(self) -> None:
         collector, _ = _make_collector(
@@ -325,6 +327,49 @@ class TestResumeStart:
         # 缺口内每一期（含最后一期已收盘的）都必须落在 [start, now) 内。
         missing = [last_open + timedelta(minutes=15 * offset) for offset in range(1, periods + 1)]
         assert all(start <= moment <= now for moment in missing)
+
+
+class TestBackwardHistoryExtension:
+    """已有目录也要能把历史向前补齐到设定的回补深度。"""
+
+    def test_extends_when_stored_history_is_shorter_than_target(self) -> None:
+        now = OPEN_15M + timedelta(days=10)
+        earliest = OPEN_15M - timedelta(days=1)
+        collector, _ = _make_collector(known=(dt_to_ns(earliest),), now=now)
+        collector._bootstrap_days = {Timeframe.MIN15: 90}
+        requests: list[tuple[datetime, datetime]] = []
+        collector._request_backfill = lambda bar_type, start, end, **kw: requests.append(
+            (start, end),
+        )
+
+        collector._extend_history_backwards(collector._bar_type_by_key[MIN15_KEY], now)
+
+        expected_start = floor_to_boundary(now - timedelta(days=90), Timeframe.MIN15)
+        assert requests == [(expected_start, earliest)]
+
+    def test_does_nothing_when_history_is_deep_enough(self) -> None:
+        now = OPEN_15M
+        collector, _ = _make_collector(
+            known=(dt_to_ns(OPEN_15M - timedelta(days=200)),),
+            now=now,
+        )
+        collector._bootstrap_days = {Timeframe.MIN15: 90}
+        requests: list[object] = []
+        collector._request_backfill = lambda *a, **kw: requests.append(a)
+
+        collector._extend_history_backwards(collector._bar_type_by_key[MIN15_KEY], now)
+
+        assert requests == []
+
+    def test_empty_catalog_is_left_to_bootstrap(self) -> None:
+        collector, _ = _make_collector(now=OPEN_15M)
+        collector._bootstrap_days = {Timeframe.MIN15: 90}
+        requests: list[object] = []
+        collector._request_backfill = lambda *a, **kw: requests.append(a)
+
+        collector._extend_history_backwards(collector._bar_type_by_key[MIN15_KEY], OPEN_15M)
+
+        assert requests == []
 
 
 class TestHistoricalGapRepair:

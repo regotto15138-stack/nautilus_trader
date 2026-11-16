@@ -505,6 +505,12 @@ def validate_annotation_payload(
                 f"(V1.4.8 does not define the ATR snapshot): {', '.join(forged)}",
             )
         data["invalidation_status"] = invalidation_status
+        structure_status = str(data.get("status") or "CONFIRMED").upper()
+        _require(
+            structure_status in {"CONFIRMED", "ACTIVE", "INVALIDATED", "EXPIRED"},
+            f"unknown N_STRUCTURE status: {structure_status}",
+        )
+        data["status"] = structure_status
 
     elif entity_type == "ZONE":
         _require_fields(data, ("zone_type", "anchor_swing_ids", "annotation_mode"), entity_type)
@@ -559,16 +565,39 @@ def validate_annotation_payload(
             str(data["direction"]).upper() in {"HIGH", "LOW"},
             "PROTECTED_POINT direction must be HIGH or LOW",
         )
+        event_type = str(data.get("event_type") or "INIT").upper()
+        _require(
+            event_type in {"INIT", "UPDATE", "INVALIDATE"},
+            f"unknown PROTECTED_POINT event_type: {event_type}",
+        )
+        if data.get("valid_to") is not None:
+            _require(
+                str(data["valid_to"]) >= str(data["valid_from"]),
+                "PROTECTED_POINT valid_to must not precede valid_from",
+            )
+        if event_type == "INVALIDATE":
+            _require_fields(data, ("invalidated_at", "invalidation_reason"), entity_type)
         data["direction"] = str(data["direction"]).upper()
+        data["event_type"] = event_type
         data["price"] = str(data["price"])
 
     elif entity_type == "STATE_INTERVAL":
-        _require_fields(data, ("state", "valid_from"), entity_type)
+        _require_fields(
+            data,
+            ("state", "valid_from", "known_at", "reason_code"),
+            entity_type,
+        )
         if data.get("valid_to") is not None:
             _require(
                 str(data["valid_to"]) >= str(data["valid_from"]),
                 "STATE_INTERVAL valid_to must not precede valid_from",
             )
+        _require(
+            str(data["known_at"]) >= str(data["valid_from"]),
+            "STATE_INTERVAL known_at must not precede valid_from",
+        )
+        data["state"] = str(data["state"]).upper()
+        data["reason_code"] = str(data["reason_code"])
 
     return data
 
@@ -942,11 +971,17 @@ class SacwStore:
         payload: dict[str, Any],
         actor: str,
         reason: str,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
         """追加一次修订；旧版本保留在 ``annotation_revisions`` 中不可变。"""
         with self._lock, self._conn:
             row = self._annotation_row(annotation_id)
             current = self._annotation_view(row)
+            if expected_revision is not None and int(row["revision"]) != expected_revision:
+                raise StoreError(
+                    f"annotation revision conflict: expected {expected_revision}, "
+                    f"was {row['revision']}",
+                )
             if current["status"] == "FROZEN":
                 raise StoreError(
                     f"annotation {annotation_id} is FROZEN and cannot be revised in place",
@@ -1317,6 +1352,87 @@ class SacwStore:
         for row in rows:
             item = _row_to_dict(row)
             item["payload"] = _load(item["payload"])
+            out.append(item)
+        return out
+
+    # --------------------------------------------------------------- 比较结果
+
+    def save_comparison_run(
+        self,
+        *,
+        golden_dataset_id: str,
+        replay_run_id: str,
+        matcher_version: str,
+        summary: dict[str, Any],
+        matches: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """持久化一次差异比较及其逐项匹配结果（SACW 6.5）。"""
+        comparison_id = new_id("cmp")
+        created_at = now_iso()
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO comparison_runs"
+                "(comparison_id, golden_dataset_id, replay_run_id, matcher_version,"
+                " created_at, summary) VALUES(?,?,?,?,?,?)",
+                (
+                    comparison_id,
+                    golden_dataset_id,
+                    replay_run_id,
+                    matcher_version,
+                    created_at,
+                    _json(summary),
+                ),
+            )
+            for item in matches:
+                self._conn.execute(
+                    "INSERT INTO match_results"
+                    "(match_id, comparison_id, human_id, program_id, match_type,"
+                    " errors, metrics) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        new_id("match"),
+                        comparison_id,
+                        item.get("human_id"),
+                        item.get("program_id"),
+                        str(item.get("match") or item.get("match_type") or "UNKNOWN"),
+                        _json(item.get("errors") or []),
+                        _json(item.get("metrics") or {}),
+                    ),
+                )
+        return self.get_comparison_run(comparison_id)  # type: ignore[return-value]
+
+    def get_comparison_run(self, comparison_id: str) -> dict[str, Any] | None:
+        """读取一次比较及其匹配结果。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM comparison_runs WHERE comparison_id = ?",
+                (comparison_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            matches = self._conn.execute(
+                "SELECT * FROM match_results WHERE comparison_id = ? ORDER BY match_id",
+                (comparison_id,),
+            ).fetchall()
+        item = _row_to_dict(row)
+        item["summary"] = _load(item["summary"])
+        item["matches"] = []
+        for match in matches:
+            entry = _row_to_dict(match)
+            entry["errors"] = _load(entry["errors"])
+            entry["metrics"] = _load(entry["metrics"])
+            item["matches"].append(entry)
+        return item
+
+    def list_comparison_runs(self) -> list[dict[str, Any]]:
+        """列出全部比较运行（不含逐项结果）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM comparison_runs ORDER BY created_at, comparison_id",
+            ).fetchall()
+        out = []
+        for row in rows:
+            item = _row_to_dict(row)
+            item["summary"] = _load(item["summary"])
             out.append(item)
         return out
 

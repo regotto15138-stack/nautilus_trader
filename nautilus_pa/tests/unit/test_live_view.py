@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from itertools import pairwise
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -281,6 +282,43 @@ def test_market_live_rejects_invalid_since(router: ApiRouter) -> None:
     assert envelope["error"]["code"] == "INVALID_SINCE"
 
 
+def test_market_bars_with_to_returns_page_adjacent_to_cursor(router: ApiRouter) -> None:
+    """带 ``to`` 的分页必须紧邻该时刻之前，而不是从最早一根开始。
+
+    真实回归：前端「向左加载」第二页拿到的是最早的一批 K 线，与第一页之间
+    跳过整段历史，图表上表现为一年以上的错断。
+    """
+    total = len(router.service.bars(Timeframe.MIN15))
+    page_size = 10
+    all_bars = router.service.bars(Timeframe.MIN15)
+    # 模拟「整页载荷」只含最后 N 根，再向前翻页。
+    newest_slice_start = all_bars[total - page_size]
+    oldest_of_payload = _iso(newest_slice_start.ts_open_ns)
+
+    older = _get(
+        router,
+        f"/api/v1/market/bars?timeframe=15M&to={oldest_of_payload}&limit={page_size}",
+    )
+
+    assert len(older["bars"]) == page_size
+    times = [_iso_to_ns(bar["openTime"]) for bar in older["bars"]]
+    # 整页严格递增，且最后一根恰好紧邻 to（不能跳空）。
+    assert all(later > earlier for earlier, later in pairwise(times))
+    assert times[-1] + 15 * 60 * 1_000_000_000 == newest_slice_start.ts_open_ns
+    # 与第一页无缝衔接：前一页最后一根 + 一个周期 = 第一页第一根。
+    assert times[0] == _iso_to_ns(oldest_of_payload) - page_size * 15 * 60 * 1_000_000_000
+
+
+def test_market_bars_without_to_starts_from_earliest(router: ApiRouter) -> None:
+    data = _get(router, "/api/v1/market/bars?timeframe=15M&limit=3")
+
+    times = [_iso_to_ns(bar["openTime"]) for bar in data["bars"]]
+    assert all(later > earlier for earlier, later in pairwise(times))
+    # 不带 to 时保持原有语义：从最早一根开始。
+    all_bars = router.service.bars(Timeframe.MIN15)
+    assert times[0] == all_bars[0].ts_open_ns
+
+
 def test_market_bars_payload_unchanged(router: ApiRouter) -> None:
     data = _get(router, "/api/v1/market/bars?timeframe=15M&limit=2")
 
@@ -307,6 +345,10 @@ def test_timeframe_section_builds_domain_view(service: DataService) -> None:
     assert section["sma"][-1]["value"] == float(updates[-1].sma)
     assert section["atr"][-1]["value"] == float(updates[-1].atr)
     assert section["candles"][-1]["time"] == updates[-1].bar.ts_open_ns // 1_000_000_000
+
+
+def _iso_to_ns(value: str) -> int:
+    return dt_to_ns(datetime.fromisoformat(value.replace("Z", "+00:00")))
 
 
 def _iso(ns: int) -> str:

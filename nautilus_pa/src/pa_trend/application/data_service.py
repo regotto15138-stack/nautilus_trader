@@ -42,8 +42,12 @@ from pa_trend.domain.structure.zone import (
 )
 from pa_trend.presentation.chart_data import build_payload, build_timeframe_section
 
-#: 每个周期最多下发多少根 K 线到看板（避免载荷过大）。
-MAX_SERIES_BARS = 500
+#: 每个周期在整页载荷里最多下发多少根 K 线（首屏窗口）。
+#:
+#: 更早的历史由前端向左滚动时按需调用 ``GET /market/bars`` 分页追加。取值按
+#: 载荷实测：每周期 5000 根时整页约 21 MB，1200 根时约 6 MB，浏览器打开明显
+#: 更快；需要更长视野时滚动即可继续加载。
+MAX_SERIES_BARS = 1200
 
 #: 合成数据的默认根数。
 DEFAULT_DEMO_BARS = 400

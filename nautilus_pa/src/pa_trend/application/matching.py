@@ -590,3 +590,76 @@ def match_zones(
         "program_count": len(program),
         "results": results,
     }
+
+
+def match_state_intervals(
+    human: Sequence[dict[str, Any]],
+    program: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """按状态与时间重叠匹配人工/程序状态区间（SACW 7.5 的基础版）。
+
+    先匹配同状态且时间重叠最大的区间；没有重叠的分别记为 HUMAN_ONLY /
+    PROGRAM_ONLY。该函数不计算 Macro-F1，逐 Bar 混淆矩阵需要额外 Bar 序列。
+    """
+    results: list[dict[str, Any]] = []
+    used: set[str] = set()
+    for item in human:
+        best: dict[str, Any] | None = None
+        best_overlap = 0
+        for candidate in program:
+            if candidate["interval_id"] in used:
+                continue
+            if candidate.get("state") != item.get("state"):
+                continue
+            overlap = min(int(item["valid_to_ns"]), int(candidate["valid_to_ns"])) - max(
+                int(item["valid_from_ns"]),
+                int(candidate["valid_from_ns"]),
+            )
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = candidate
+        if best is None:
+            results.append(
+                {
+                    "human_id": item.get("interval_id") or item.get("annotation_id"),
+                    "program_id": None,
+                    "match": "HUMAN_ONLY",
+                    "metrics": {},
+                },
+            )
+            continue
+        used.add(best["interval_id"])
+        results.append(
+            {
+                "human_id": item.get("interval_id") or item.get("annotation_id"),
+                "program_id": best["interval_id"],
+                "match": "MATCHED",
+                "metrics": {
+                    "overlap_seconds": round(best_overlap / 1_000_000_000, 3),
+                    "start_delta_seconds": round(
+                        abs(int(item["valid_from_ns"]) - int(best["valid_from_ns"])) / 1e9,
+                        3,
+                    ),
+                    "end_delta_seconds": round(
+                        abs(int(item["valid_to_ns"]) - int(best["valid_to_ns"])) / 1e9,
+                        3,
+                    ),
+                },
+            },
+        )
+    for candidate in program:
+        if candidate["interval_id"] in used:
+            continue
+        results.append(
+            {
+                "human_id": None,
+                "program_id": candidate["interval_id"],
+                "match": "PROGRAM_ONLY",
+                "metrics": {},
+            },
+        )
+    return {
+        "human_count": len(human),
+        "program_count": len(program),
+        "results": results,
+    }
