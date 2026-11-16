@@ -8,7 +8,7 @@
 # %% [markdown]
 # ## Prerequisites
 #
-# - Python 3.13-3.15
+# - Python 3.13-3.14
 # - NautilusTrader 2.x installed (`pip install -U --pre nautilus_trader`). The `--pre`
 #   flag is required while 2.x ships as `2.0.0rcN`; without it pip installs the 1.x
 #   line, whose Python API differs and cannot run this page.
@@ -143,7 +143,6 @@ from nautilus_trader.model import Venue
 # Create a EUR/USD instrument on the SIM venue
 EUR = Currency.from_str("EUR")
 USD = Currency.from_str("USD")
-
 EURUSD = CurrencyPair(
     instrument_id=InstrumentId.from_str("EUR/USD.SIM"),
     raw_symbol=Symbol("EUR/USD"),
@@ -165,7 +164,6 @@ rng = np.random.default_rng(42)
 n = 10_000
 price = 1.10 + np.cumsum(rng.normal(0, 0.0002, n))
 spread = np.abs(rng.normal(0, 0.0003, n))
-
 bars_df = pd.DataFrame(
     {
         "open": price,
@@ -175,7 +173,6 @@ bars_df = pd.DataFrame(
     },
     index=pd.date_range("2024-01-01", periods=n, freq="1min", tz="UTC"),
 )
-
 bars_df["high"] = bars_df[["open", "high", "close"]].max(axis=1)
 bars_df["low"] = bars_df[["open", "low", "close"]].min(axis=1)
 
@@ -238,7 +235,6 @@ strategy = EMACross(
         trade_size=Decimal(100000),
     ),
 )
-
 engine.add_strategy(strategy)
 
 # Run the backtest
@@ -257,13 +253,30 @@ engine.run()
 # trade with its realized PnL, and the order fills report shows every execution.
 
 # %%
-engine.generate_account_report(venue=SIM)
+account_report = engine.generate_account_report(venue=SIM)
 
 # %%
-engine.generate_positions_report()
+positions_report = engine.generate_positions_report()
 
 # %%
-engine.generate_order_fills_report()
+order_fills_report = engine.generate_order_fills_report()
+
+from nautilus_trader.analysis import create_tearsheet
+
+create_tearsheet(
+    engine=engine,
+    output_path="backtest_results.html",
+)
+
+from nautilus_trader.analysis import create_bars_with_fills
+
+fig = create_bars_with_fills(
+    engine=engine,
+    bar_type=bar_type,
+    title="Strategy Execution",
+)
+
+fig.write_html("bars_with_fills.html")
 
 # %% [markdown]
 # ## Next steps

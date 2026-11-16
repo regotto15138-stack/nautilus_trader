@@ -1,15 +1,14 @@
 [project]
 name = "nautilus-trader"
-version = "2.0.0"
+version = "2.0.0rc8"
 description = "Production-grade Rust-native trading engine with deterministic event-driven architecture"
 authors = [{ name = "Nautech Systems", email = "info@nautechsystems.io" }]
 classifiers = [
   "Operating System :: OS Independent",
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 4 - Beta",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
-  "Programming Language :: Python :: 3.15",
   "Programming Language :: Rust",
   "Topic :: Software Development :: Libraries",
   "Topic :: Scientific/Engineering",
@@ -22,7 +21,7 @@ classifiers = [
 license = "LGPL-3.0-only"
 license-files = ["LICENSE"]
 readme = "../README.md"
-requires-python = ">=3.13,<3.16"
+requires-python = ">=3.13,<3.15"
 dependencies = []
 
 [project.optional-dependencies]
@@ -40,7 +39,7 @@ docs = "https://nautilustrader.io/docs"
 
 [build-system]
 # Keep the maturin pin exact; scripts/maturin-version.bash uses it for CI wheel builds.
-requires = ["maturin==1.16.0", "patchelf"]
+requires = ["maturin==1.15.0", "patchelf"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -50,6 +49,8 @@ python-source = "."
 features = [
   "extension-module",
   "arrow",
+  "betfair",
+  "coinapi",
   "high-precision",
   "mimalloc",
   "redis",
@@ -70,7 +71,9 @@ environments = [
   "sys_platform == 'win32' and platform_machine == 'AMD64'",
 ]
 exclude-newer = "7 days"
-exclude-newer-package = { ruff = "3 days" }
+# Keep the reviewed certifi security release eligible; remove its cutoff after
+# 2026-10-27T02:24:17Z, when the seven-day default includes it
+exclude-newer-package = { certifi = "2026-10-20T02:24:17Z", ruff = "3 days" }
 # Block sdist builds for every third-party package in python/uv.lock so
 # unexpected loss of wheel publishing fails `uv lock` instead of silently
 # building from source. Kept in sync with python/uv.lock by
@@ -152,12 +155,12 @@ no-build-package = [
 ]
 
 [dependency-groups]
-dev = ["maturin==1.16.0", "ruff>=0.17.5", "ty>=0.0.99"]
+dev = ["maturin==1.15.0", "ruff>=0.17.1", "ty>=0.0.89"]
 test = [
   "pyarrow>=26.0.0",
   "polars",
-  "pytest>=9.2.0",
-  "pytest-asyncio>=1.4.1",
+  "pytest>=9.1.1",
+  "pytest-asyncio>=1.4.0",
   "pytest-cov>=7.1.0",
   "pytest-memray>=1.10.0; sys_platform == 'darwin' or sys_platform == 'linux'",
   "pytest-xdist[psutil]>=3.8.0",
@@ -170,9 +173,6 @@ docs = [
   "myst-parser>=5.1.0,<6.0.0",
   "sphinx-comments>=0.0.3,<1.0.0",
 ]
-
-[tool.uv.dependency-groups]
-docs = { requires-python = ">=3.13,<3.15" }
 
 [tool.ruff]
 target-version = "py313"
@@ -187,21 +187,16 @@ exclude = [
   "../patches",
   "../target",
   "patches",
+  # Standalone research project with its own pyproject.toml and lint settings.
+  "../nautilus_pa",
+  "nautilus_pa",
 ]
 
 [tool.ruff.lint]
 preview = true
 explicit-preview-rules = true
 select = ["ALL"]
-extend-select = [
-  "E301", # Blank lines between methods
-  "E302", # Blank lines before top-level definitions
-  "E303", # Consecutive blank lines
-  "E304", # Decorators stay attached to definitions
-  "E305", # Blank lines after top-level definitions
-  "E306", # Blank lines before nested definitions
-  "PLW1514",
-]
+extend-select = ["PLW1514"]
 
 ignore = [
   "COM812", # Ruff formatter controls trailing commas
@@ -319,17 +314,17 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
   "S101",
   "T20",
 ] # TODO: Remove Jupytext exemptions as these guides are updated
-# Jupytext prose replaces module headers; standalone lessons are not packages
-"docs/tutorials/**/*.py" = ["CPY001", "D100", "INP001"]
-"docs/tutorials/{assets/**/*.py,backtest_fx_bars.py,backtest_orderbook_binance.py,backtest_orderbook_bybit.py,ema_cross.py,orderbook_data.py}" = [
+"docs/tutorials/**/*.py" = [
   "ANN001",
   "B018",
+  "CPY001",
   "D",
   "E402",
   "E501",
   "ERA001",
   "FBT002",
   "I001",
+  "INP001",
   "N806",
   "PLR0913",
   "PLR0917",
@@ -338,11 +333,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
   "S101",
   "T20",
   "TC003",
-] # TODO: Remove legacy exemptions as these tutorials are updated
-"docs/tutorials/{backtest_orderbook_coinapi.py,backtest_orderbook_finfeed.py}" = [
-  "S101",
-  "T201",
-] # Snapshot assertions and visible reports are part of the lesson
+] # TODO: Remove Jupytext exemptions as these tutorials are updated
 "docs/how_to/**/*.py" = [
   "B018",
   "CPY001",

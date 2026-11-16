@@ -57,6 +57,7 @@ def main() -> None:
             OKXDataClientConfig(
                 instrument_types=INSTRUMENT_TYPES,
                 environment=OKX_ENVIRONMENT,
+                proxy_url="http://172.21.192.1:7890",
             ),
         )
         .build()
