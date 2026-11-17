@@ -24,7 +24,7 @@ PYTHONPATH=src $VENV scripts/validate_data.py --help
 ### 测试与规范
 
 ```bash
-PYTHONPATH=src $VENV -m pytest -q      # 期望 333 passed
+PYTHONPATH=src $VENV -m pytest -q      # 期望 349 passed
 PYTHONPATH=src $VENV -m ruff check .   # 期望 All checks passed
 ```
 
@@ -239,6 +239,8 @@ PYTHONPATH=src $VENV scripts/serve_chart.py --store /tmp/sacw.sqlite3
 | `--port` | `8787` | 监听端口 |
 | `--code-commit` | 无 | 写入回归记录的代码版本 |
 | `--session-offset-hours` | 配置中的 `research.session_offset_hours`（8） | 会话偏移 |
+| `--proxy-url` | 无 | 点「实时」徽章补数时传给采集器的 OKX 代理；不填则补数多半连不上 |
+| `--sync-timeout-secs` | 300 | 单次按需补数的等待上限 |
 
 #### 端口被占用
 
@@ -274,7 +276,48 @@ PYTHONPATH=src $VENV scripts/serve_chart.py --port 8788
    保护点），前端增量追加；
 3. 单个周期新增超过 500 根时前端整页重载。
 
-顶栏实时徽章显示最近更新时刻与追加根数，点击可暂停/恢复轮询。
+顶栏实时徽章有三种状态：
+
+| 徽章 | 含义 |
+| --- | --- |
+| 实时 · 已追平（绿） | 目录里的 K 线已跟上当前 UTC |
+| 实时 · 数据落后 …（黄） | 落后当前 UTC，附周期名与欠根数；点击即可补齐 |
+| 实时刷新失败 …（红） | 轮询本身失败 |
+
+**点击徽章 = 补齐数据**（不是暂停轮询）。补齐走
+`POST /api/v1/market/sync`：服务端先审计目录，确实落后才用子进程起一次
+`run_collector.py --backfill-only`，等它落盘退出后再整页重载 K 线与全部指标。
+「已追平」时不会启动子进程。`Shift+点击` 或右键仍是暂停/恢复轮询。
+
+> 为什么要区分「有新数据」和「数据落后」：采集器停掉时 `/market/live` 的
+> `changed` 会一直是假。只看 `changed` 就会把 17 小时前的数据当实时数据展示。
+> `stale` 由服务端按当前 UTC 与目录里最后一根**已收盘** K 线比较得出，尚未
+> 收盘的蜡烛不计入。
+
+#### 启动时的数据新鲜度自检
+
+`serve_chart.py` 启动时审计一次目录并打印落后情况（**只报告，不自动补数**）：
+
+```
+数据新鲜度: 以下周期落后于当前 UTC
+  - 1H: 末根 2026-11-16T10:00:00+00:00 缺 18 根已收盘 K 线
+  - 15M: 末根 2026-11-16T11:15:00+00:00 缺 71 根已收盘 K 线
+  提示：打开页面后点击右上角「实时」按钮补齐，或运行 scripts/run_collector.py 常驻采集。
+```
+
+工作台不替用户访问交易所：补齐要么点按钮按需触发，要么另开常驻采集器。
+补数需要网络，所以 `serve_chart.py` 要带 `--proxy-url` 才能点按钮补数：
+
+```bash
+PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://172.21.192.1:7890
+```
+
+随时可从命令行审计目录（退出码 1 表示存在缺口）：
+
+```bash
+PYTHONPATH=src $VENV scripts/gap_audit.py
+PYTHONPATH=src $VENV scripts/gap_audit.py --json
+```
 
 #### 长周期视野与向左滚动加载
 
@@ -294,8 +337,14 @@ PYTHONPATH=src $VENV scripts/serve_chart.py --port 8788
 # 终端 1
 PYTHONPATH=src $VENV scripts/run_collector.py --proxy-url http://172.21.192.1:7890
 # 终端 2
-PYTHONPATH=src $VENV scripts/serve_chart.py
+PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://172.21.192.1:7890
 curl -s "localhost:8787/api/v1/market/live" | python3 -m json.tool | head -20
+```
+
+只起工作台、按需补数（不常驻采集器）也可以：点顶栏「实时」徽章即补齐一次。
+
+```bash
+PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://172.21.192.1:7890
 ```
 
 ### 6.1 结构标注页签
@@ -322,11 +371,11 @@ curl -s "localhost:8787/api/v1/market/live" | python3 -m json.tool | head -20
 
 | 工具 | 操作 | 产物 |
 | --- | --- | --- |
-| Swing | 第一次点击选发生 Bar，第二次点击选确认 Bar；价格默认取该 Bar 的 High/Low | `SWING_POINT`（区分 `occurred_at` / `confirmed_at`，默认 `confirmation_policy=HUMAN_JUDGED`） |
+| Swing | 第一次点击选发生 Bar，第二次点击选确认 Bar；价格默认取该 Bar 的 High/Low，可在待提交面板改价（必须填改价原因） | `SWING_POINT`（区分 `occurred_at` / `confirmed_at`，默认 `confirmation_policy=HUMAN_JUDGED`；改价写 `manual_price_override=true` + `override_reason`） |
 | N 结构 | 依次选 L1 → H1 → L2 → H2 四个已确认摆动点 | `N_STRUCTURE`（前端先校验顺序与 `L2>L1`、`H2>H1`；失效字段标记 `SPEC_AMBIGUITY`） |
 | Zone | 选 ≥2 个**同向**摆动点，再选 `ANCHOR_ONLY` 或 `HUMAN_BOUNDARY` | `ZONE`（ANCHOR_ONLY 边界由后端计算；HUMAN_BOUNDARY 人工边界与程序边界分开保存） |
-| 保护点 | 点击 Bar，选择 `INIT / UPDATE / INVALIDATE` | `PROTECTED_POINT`（15M 独立 ProtectedLow 被拒绝） |
-| 状态区间 | 先选状态，再点击开始 Bar 与结束 Bar | `STATE_INTERVAL`（`valid_from` / `valid_to` / `known_at` / `reason_code`） |
+| 保护点 | 点击 Bar，选择 `INIT / UPDATE / INVALIDATE`，并确认来源 SwingPoint | `PROTECTED_POINT`（必须带 `source_swing_id`；15M 独立 ProtectedLow 被拒绝） |
+| 状态区间 | 先选状态，再点击开始 Bar 与结束 Bar | `STATE_INTERVAL`（`valid_from` / `valid_to` / `known_at` / `reason_code`；图上以背景色带显示） |
 
 右侧「锚点候选」面板列出本周期已确认摆动点，点击即选中（比在图上点更精确），
 也可直接在图上点击。选中后底部显示待提交对象，点「**保存草稿（DRAFT）**」入库。
@@ -337,7 +386,13 @@ curl -s "localhost:8787/api/v1/market/live" | python3 -m json.tool | head -20
 
 标注列表支持软删除（`DELETE /annotations/{id}`，FROZEN 不可删）和导出 JSON。
 「人工标注」图层把已保存的 Swing / Zone / N 结构 / 保护点 / 状态区间叠加到图上，
-与程序结构分开显示。
+与程序结构分开显示；状态区间额外绘制背景色带。
+
+**列表与编辑**：标注列表上方可按类型 / ID / 价格 / 状态关键字搜索，并可按对象时间
+区间过滤（Swing 用 `occurred_at`，区间/保护点用 `valid_from`）。每条标注可「编辑」
+（PATCH + `expected_revision`，冲突时提示“标注已被他人修改，请刷新”）或「复制」为
+新的 DRAFT；编辑支持撤销 / 重做（按钮或 `Ctrl+Z` / `Ctrl+Y`）。
+保护点必须选择来源 SwingPoint；Swing 改价必须填写原因，列表会显示「人工改价」徽章。
 
 **保存后一律是 `DRAFT`，不是 Ground Truth。** 前端不会在保存时调用策略引擎
 “核对标注是否正确”；程序只会在黄金样本冻结之后，用 V1.4.8 引擎回放同一段数据，
@@ -375,12 +430,14 @@ DRAFT → SUBMITTED → REVIEWED → APPROVED → FROZEN
 **黄金样本冻结**：只接受 `APPROVED` / `FROZEN` 且来源为 `HUMAN_PRIMARY` /
 `HUMAN_REVIEWED` 的标注。冻结时：
 
-1. 生成 `data_hash` / `annotation_hash` / `frozen_at`；
+1. 生成 `data_hash` / `annotation_hash` / `time_split_hash` / `frozen_at`；
 2. 创建并绑定 `baseline_replay_run_id`、`baseline_code_commit`、
    `baseline_config_hash`；
 3. 把参与冻结的标注加入黄金样本成员清单，并将 `APPROVED` 同步转为 `FROZEN`。
 
 冻结后刷新标注列表即可看到 `FROZEN` 状态；冻结版不可原地修改，修订会创建新版本。
+数据集页签的「自动三分（60/20/20）」按时间顺序生成 CALIBRATION / VALIDATION /
+HOLDOUT 三个切分，并把同一 `time_split_hash` 写回三条记录。
 标注面板会显示项目级状态汇总（DRAFT / SUBMITTED / REVIEWED / APPROVED / FROZEN）；
 没有 APPROVED/FROZEN 时「冻结黄金样本」按钮保持禁用，避免误点后返回 400。
 
@@ -547,7 +604,7 @@ A: `nautilus_pa/var/sacw.sqlite3`，已在 `.gitignore` 中。可用 `--store` �
 ## 11. 可复现验证
 
 ```bash
-# 单元 + 集成测试（333 项）
+# 单元 + 集成测试（349 项）
 PYTHONPATH=src $VENV -m pytest -q
 
 # 静态检查

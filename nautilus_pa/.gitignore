@@ -23,3 +23,8 @@ venv/
 # 采集到的行情数据（Parquet）按约定纳入版本控制。
 # 父仓库根目录的 .gitignore 有全局 `*.parquet` 规则，这里显式取回。
 !catalog/**/*.parquet
+
+# 需求目录要入库。父仓库根目录的 .gitignore 有全局 `requirements*` 规则（针对 Python
+# 依赖清单），这里显式取回本项目的需求文档目录。
+!requirements/
+!requirements/**

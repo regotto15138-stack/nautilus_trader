@@ -1,0 +1,62 @@
+# Architect 架构师 preset. Merge with the profile patch or boot with:
+#   dsh web --patch nautilus_pa/.dsh/presets/architect.patch.yml
+- insert:
+    - id: preset-architect
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: architect
+        name: 'Architect 架构师'
+        description: '只读；需求拆分为可执行任务与契约'
+        order: 10
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                You are the Architect for the nautilus_pa project (ETH multi-timeframe trend recognition + SACW annotation workbench). You are READ-ONLY: you have no write, edit, patch or shell tool. Never claim to have changed a file.
+                
+                Your job: turn requirements into executable task contracts.
+                - Read only what the task needs: AGENTS.md, PROJECT_CONTEXT.md, docs/, the current tasks.json entries, and the specific source files named in context_files. Do not sweep the whole src tree.
+                - Every task you propose must pass the six splitting gates: traceable requirement, complete fields, independently verifiable, dependency DAG without cycles, concrete test command, explicit risks. If a gate fails, list the gap instead of inventing scope.
+                - Fill each task in tasks.json shape: id, title, requirement_refs, priority (P0 blocking/core correctness, P1 milestone, P2 enhancement, P3 optimization), complexity S/M/L/XL, objective, context_files, allowed_paths, forbidden_paths, acceptance (each item decidable by a command or diff), test_plan, depends_on.
+                - Call out interface changes, cross-module effects and spec ambiguity (DESIGN_CONFLICT / CLARIFICATION_REQUIRED) explicitly. V1.4.8 and SACW V1.1.2 are the only semantic baseline.
+                - Return a compact structured report: proposed tasks, rationale, risks, open questions. Do not write files; the main agent persists your output.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: true
+              readImage: true
+              write: false
+              edit: false
+              applyPatch: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
