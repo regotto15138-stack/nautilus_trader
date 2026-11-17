@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "project": "nautilus_pa",
+  "description": "nautilus_pa 的唯一任务状态来源。字段语义见 .dsh/tasks/README.md。",
+  "updated_at": "2026-11-17",
+  "state_machine": [
+    "DRAFT",
+    "READY",
+    "IN_PROGRESS",
+    "IMPLEMENTED",
+    "REVIEWING",
+    "TESTING",
+    "ACCEPTED"
+  ],
+  "exception_states": [
+    "BLOCKED",
+    "REJECTED",
+    "CANCELLED"
+  ],
+  "active_states": [
+    "READY",
+    "IN_PROGRESS",
+    "IMPLEMENTED",
+    "REVIEWING",
+    "TESTING"
+  ],
+  "conventions": {
+    "task_id": "TASK-NNN",
+    "requirement_id": "REQ-NNN",
+    "commit_subject": "^(TASK-\\d{3})\\s+\\S.{2,71}$",
+    "commit_rule": "提交信息第一行 = TASK-ID + 空格 + 摘要；不使用 Conventional Commits 前缀（上游 AGENTS.md 禁止）。",
+    "path_rule": "allowed_paths 以 / 结尾表示整棵子树；匹配相对 nautilus_pa/ 的 POSIX 路径。",
+    "single_writer": "同一文件同一时刻只允许一个写者。"
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "建立 DSH 协作工程规范基线",
+      "requirement_refs": [
+        "REQ-000"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P0",
+      "complexity": "M",
+      "owner": "lead",
+      "role": "main",
+      "created_at": "2026-11-17",
+      "updated_at": "2026-11-17",
+      "depends_on": [],
+      "objective": "在 nautilus_pa/ 建立 .dsh 模板、md 准则、3 个 Agent Preset 与 tasks.json 任务流转规则。",
+      "context_files": [
+        "nautilus_pa/DSH 大型项目开发操作标准.md",
+        "nautilus_pa/README.md",
+        "nautilus_pa/执行计划.md"
+      ],
+      "allowed_paths": [
+        ".dsh/",
+        "AGENTS.md",
+        "PROJECT_CONTEXT.md",
+        "requirements/",
+        "docs/",
+        "development/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/",
+        "scripts/",
+        "USAGE.md",
+        "执行计划.md",
+        "catalog/"
+      ],
+      "acceptance": [
+        ".dsh/ 目录含 config/contracts/tasks/sessions/reviews/presets/scripts 七类文件",
+        "tasks.json 通过 .dsh/scripts/validate_tasks.py 校验",
+        "architect/developer/reviewer 三个 preset 通过 dsh --dump-config 组合校验",
+        "AGENTS.md 写明 tasks.json 流转、Task ID 提交、禁止无状态修改",
+        "git hook 能拒绝缺少 Task ID 或越界的提交"
+      ],
+      "test_plan": [
+        "python .dsh/scripts/validate_tasks.py",
+        "dsh --profile web --patch <tmp patch> --dump-config"
+      ],
+      "branch": "master",
+      "commits": [],
+      "evidence": {
+        "commands": [],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "引导任务（bootstrap）：规范文件本身由主 Agent 自审，证据为校验脚本与 dump-config 输出。"
+    },
+    {
+      "id": "TASK-002",
+      "title": "B00 收口：PATCH 乐观锁强制 expected_revision",
+      "requirement_refs": [
+        "REQ-001"
+      ],
+      "status": "DRAFT",
+      "priority": "P1",
+      "complexity": "M",
+      "owner": null,
+      "role": null,
+      "created_at": "2026-11-17",
+      "updated_at": "2026-11-17",
+      "depends_on": [
+        "TASK-001"
+      ],
+      "objective": "标注 PATCH 接口强制校验 expected_revision，前端在冲突时提示并刷新。",
+      "context_files": [
+        "src/pa_trend/presentation/api.py",
+        "web/app.js",
+        "执行计划.md"
+      ],
+      "allowed_paths": [
+        "src/pa_trend/presentation/",
+        "tests/integration/",
+        "tests/unit/"
+      ],
+      "forbidden_paths": [
+        "configs/",
+        "docs/",
+        "requirements/"
+      ],
+      "acceptance": [
+        "PATCH /api/v1/annotations/{id} 缺失或过期 expected_revision 返回 409",
+        "前端捕获 409 后提示并重新拉取最新 revision",
+        "新增集成测试覆盖成功/冲突两条路径"
+      ],
+      "test_plan": [
+        "PYTHONPATH=src python -m pytest -q tests/integration tests/unit"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "来自执行计划 B00 的已记录缺口；尚未通过拆分门槛，DRAFT 待 Architect 补全后进 READY。"
+    }
+  ]
+}

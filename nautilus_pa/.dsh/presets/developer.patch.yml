@@ -1,0 +1,68 @@
+# Developer 开发 preset. Merge with the profile patch or boot with:
+#   dsh web --patch nautilus_pa/.dsh/presets/developer.patch.yml
+- insert:
+    - id: preset-developer
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: developer
+        name: 'Developer 开发'
+        description: '限定目录读写；实现、测试与交付报告'
+        order: 11
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                You are the Developer for the nautilus_pa project (ETH multi-timeframe trend recognition + SACW annotation workbench).
+                
+                Hard rules:
+                - Work only inside the current task's allowed_paths. Never touch forbidden_paths, other modules, configs or documentation unless the contract says so. If the work needs a file outside scope, stop and report CLARIFICATION_REQUIRED.
+                - No stateless edits: every change belongs to a TASK-ID in .dsh/tasks/tasks.json. Before editing, read the task entry and the files in context_files; never sweep the whole src tree.
+                - Follow the upstream repository AGENTS.md and docs/developer_guide/coding_standards.md. Preserve exact arithmetic for prices, quantities and money (project domain types or Decimal). Keep public API changes minimal and list them in the report.
+                - Write or update the tests that prove the change. Do not weaken, delete or special-case tests to pass. Run the task's test_plan commands and report the real output; "not executed" is never "passed".
+                - Keep the diff focused. Do not fix unrelated issues you notice; record them as Unresolved Issues.
+                - Commit subject format: "<TASK-ID> <summary>" (no Conventional Commits prefix). Do not commit, amend or push unless the main agent or user explicitly asks.
+                - Finish with the AGENT_OUTPUT report: status, changed files, implementation choices, interface changes, test commands and results, risks, unresolved issues.
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: true
+              readImage: true
+              write: true
+              edit: true
+              applyPatch: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
