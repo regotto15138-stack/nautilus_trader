@@ -71,7 +71,7 @@ nautilus_pa/
 │   └── presentation/               # 图表载荷 + HTTP API 路由
 ├── web/                            # Lightweight Charts 工作台（库内置，无需联网）
 ├── scripts/                        # 采集、校验、研究、服务、浏览器自检
-├── tests/                          # 单元 + 集成（333 项）
+├── tests/                          # 单元 + 集成（349 项）
 └── var/                            # SACW SQLite（gitignore）
 ```
 
@@ -81,7 +81,7 @@ nautilus_pa/
 cd nautilus_pa
 VENV=/home/regotto/Code/nautilus_trader/python/.venv/bin/python
 
-PYTHONPATH=src $VENV -m pytest -q        # 333 passed
+PYTHONPATH=src $VENV -m pytest -q        # 349 passed
 PYTHONPATH=src $VENV -m ruff check .     # All checks passed
 ```
 
@@ -118,13 +118,14 @@ PYTHONPATH=src $VENV scripts/serve_chart.py      # http://127.0.0.1:8787/
 ```text
 GET  /meta                                  GET  /market/snapshot
 GET  /market/live?since_close_ns=           GET  /market/bars?timeframe=&from=&to=&limit=&cursor=
+GET  /market/freshness                      POST /market/sync
 GET  /market/datasets                       GET  /market/coverage
 GET  /indicators/series?timeframe=&fields=  POST /zones/preview
 GET/POST /annotation-projects               GET/POST /annotation-projects/{id}/annotations
-GET/PATCH /annotations/{id}                 POST /annotations/{id}/status
+GET/PATCH/DELETE /annotations/{id}          POST /annotations/{id}/status
 POST /annotations/{id}/{submit|review|approve|freeze}
-GET  /annotations/{id}/revisions            GET  /audit-logs
-DELETE /annotations/{id}
+POST /annotations/{id}/copy                 GET  /annotations/{id}/revisions
+GET  /audit-logs
 POST /annotation-projects/{id}/comparisons/swings?timeframe=&golden_dataset_id=
 POST /annotation-projects/{id}/comparisons/zones?timeframe=&golden_dataset_id=
 POST /annotation-projects/{id}/comparisons/n-structures?timeframe=&golden_dataset_id=
@@ -135,6 +136,7 @@ POST /replay-runs/{id}/cancel
 GET/POST /boundary-overrides                POST /boundary-overrides/{id}/review
 GET/POST /golden-datasets                    GET  /golden-datasets/{id}
 POST /golden-datasets/{id}/validate          POST /golden-datasets/{id}/split
+                                             （省略区间时自动 60/20/20 三分）
 GET  /market/datasets/{id}/splits
 GET  /snapshots                              GET/POST /snapshots/artifacts
 GET  /regression-cases[/{id}]               POST /regression-cases/{id}/runs
@@ -165,7 +167,22 @@ POST /regression-suites/v1-4-8/run          GET  /regression-runs[/{id}][/assert
   通过 `GET /market/bars?to=&limit=` 分页前插；
 - 没有新数据时只返回状态，载荷可以忽略。
 
-页面顶栏的实时徽章显示最近一次更新时刻与追加根数，点击可暂停/恢复轮询。
+`changed` 只表示「本地目录里出现了新 K 线」。采集器停掉时它一直是假，因此本接口
+另带 `stale`（以及逐周期的 `freshness`）：服务端按当前 UTC 与目录里最后一根
+**已收盘** K 线比较，判断数据是否落后。尚未收盘的蜡烛不计入。
+
+### 按需补齐（`GET /market/freshness`、`POST /market/sync`）
+
+- `GET /market/freshness` 只读地审计各周期：根数、首末根、尾部欠根、中间缺口段；
+- `POST /market/sync` 先审计，**确实落后才**用子进程起一次
+  `run_collector.py --backfill-only`，等采集器落盘退出后让视图失效，由前端整页重载
+  K 线与全部指标。已追平直接返回 `up-to-date`，不启动子进程；并发调用返回
+  `SYNC_BUSY`（409）。
+
+工作台自身不访问交易所，补数一律交给采集器子进程；因此补数需要 `--proxy-url`。
+
+页面顶栏的实时徽章：绿=已追平，黄=数据落后（点击即补齐），红=轮询失败。
+`Shift+点击` 或右键暂停/恢复轮询。
 
 ### 数据持久化
 

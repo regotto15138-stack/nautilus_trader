@@ -9,6 +9,7 @@ import pytest
 from pa_trend.application.annotation_store import (
     SacwStore,
     StoreError,
+    compute_time_split_hash,
     validate_annotation_payload,
 )
 
@@ -404,3 +405,155 @@ def test_golden_freeze_records_membership_and_baseline_replay(store: SacwStore) 
     ]
     frozen = store.get_annotation(swing["annotation_id"])
     assert frozen["status"] == "FROZEN"
+
+
+def test_swing_manual_price_override_requires_reason() -> None:
+    """手动改价必须带覆盖原因（SACW 3.4A、6.2）。"""
+    with pytest.raises(StoreError, match="override_reason"):
+        validate_annotation_payload(
+            "SWING_POINT",
+            {**SWING, "manual_price_override": True},
+        )
+    data = validate_annotation_payload(
+        "SWING_POINT",
+        {**SWING, "manual_price_override": True, "override_reason": "影线按 tick 取整"},
+    )
+    assert data["manual_price_override"] is True
+    assert data["override_reason"] == "影线按 tick 取整"
+    default = validate_annotation_payload("SWING_POINT", dict(SWING))
+    assert default["manual_price_override"] is False
+
+
+def test_protected_point_requires_source_swing_id() -> None:
+    """保护点必须能追溯来源 SwingPoint（SACW 3.4D）。"""
+    with pytest.raises(StoreError, match="source_swing_id"):
+        validate_annotation_payload(
+            "PROTECTED_POINT",
+            {
+                "direction": "LOW",
+                "price": "3100",
+                "valid_from": "2025-01-01T10:00:00Z",
+            },
+        )
+    data = validate_annotation_payload(
+        "PROTECTED_POINT",
+        {
+            "direction": "LOW",
+            "price": "3100",
+            "valid_from": "2025-01-01T10:00:00Z",
+            "source_swing_id": "ann_swing_1",
+        },
+    )
+    assert data["source_swing_id"] == "ann_swing_1"
+
+
+def test_list_annotations_filters_by_time_and_keyword(store: SacwStore) -> None:
+    """标注列表支持时间区间与关键字检索（SACW 11.1）。"""
+    project = store.ensure_project()
+    january = _create_swing(
+        store,
+        project["project_id"],
+        occurred_at="2025-01-01T10:00:00Z",
+        confirmed_at="2025-01-01T10:45:00Z",
+    )
+    february = _create_swing(
+        store,
+        project["project_id"],
+        price="3200.0",
+        occurred_at="2025-02-01T10:00:00Z",
+        confirmed_at="2025-02-01T10:45:00Z",
+    )
+    filtered = store.list_annotations(
+        project["project_id"],
+        time_from="2025-01-15T00:00:00Z",
+    )
+    assert [item["annotation_id"] for item in filtered] == [february["annotation_id"]]
+    same_day = store.list_annotations(
+        project["project_id"],
+        time_from="2025-02-01",
+        time_to="2025-02-01",
+    )
+    assert [item["annotation_id"] for item in same_day] == [february["annotation_id"]]
+    searched = store.list_annotations(project["project_id"], search="3200")
+    assert [item["annotation_id"] for item in searched] == [february["annotation_id"]]
+    assert len(store.list_annotations(project["project_id"], search="SWING")) == 2
+    assert january["annotation_id"] != february["annotation_id"]
+
+
+def test_copy_annotation_starts_new_draft(store: SacwStore) -> None:
+    """复制生成新的 DRAFT，原标注与修订历史不受影响（SACW 3.6）。"""
+    project = store.ensure_project()
+    source = _create_swing(store, project["project_id"])
+    copied = store.copy_annotation(
+        annotation_id=source["annotation_id"],
+        actor="tester",
+        reason="duplicate",
+    )
+    assert copied["annotation_id"] != source["annotation_id"]
+    assert copied["revision"] == 1
+    assert copied["status"] == "DRAFT"
+    assert copied["payload"]["price"] == source["payload"]["price"]
+    actions = {item["action"] for item in store.list_audit_logs()}
+    assert "ANNOTATION_COPIED" in actions
+
+
+def test_time_split_hash_is_deterministic_and_bound_to_freeze(store: SacwStore) -> None:
+    """切分哈希与顺序无关；冻结黄金样本时固化该哈希（SACW 6.3）。"""
+    first = [
+        {"split": "CALIBRATION", "range_start": "2025-01-01", "range_end": "2025-02-01"},
+        {"split": "VALIDATION", "range_start": "2025-02-01", "range_end": "2025-03-01"},
+        {"split": "HOLDOUT", "range_start": "2025-03-01", "range_end": "2025-04-01"},
+    ]
+    assert compute_time_split_hash(first) == compute_time_split_hash(list(reversed(first)))
+    project = store.ensure_project()
+    swing = _create_swing(store, project["project_id"])
+    for target in ("SUBMITTED", "REVIEWED", "APPROVED"):
+        store.transition_annotation(
+            annotation_id=swing["annotation_id"],
+            status=target,
+            actor="tester",
+        )
+    for item in first:
+        store.save_dataset_split(
+            dataset_id="ds-hash",
+            data_hash="data-hash",
+            annotation_hash="ann-hash",
+            **item,
+        )
+    splits = store.list_dataset_splits("ds-hash")
+    assert {item["time_split_hash"] for item in splits} == {compute_time_split_hash(first)}
+    golden = store.freeze_golden_dataset(
+        project_id=project["project_id"],
+        split="HOLDOUT",
+        data_hash="data-hash",
+        actor="tester",
+        dataset_id="ds-hash",
+    )
+    assert golden["time_split_hash"] == compute_time_split_hash(first)
+
+
+
+def test_freeze_generates_hash_for_zero_span_annotation_range(store: SacwStore) -> None:
+    """单点标注（发生=确认）仍有可追溯的 time_split_hash（SACW 6.3）。"""
+    project = store.ensure_project()
+    swing = _create_swing(
+        store,
+        project["project_id"],
+        occurred_at="2025-01-01T10:00:00Z",
+        confirmed_at="2025-01-01T10:00:00Z",
+    )
+    for target in ("SUBMITTED", "REVIEWED", "APPROVED"):
+        store.transition_annotation(
+            annotation_id=swing["annotation_id"],
+            status=target,
+            actor="tester",
+        )
+    golden = store.freeze_golden_dataset(
+        project_id=project["project_id"],
+        split="HOLDOUT",
+        data_hash="data-hash",
+        actor="tester",
+        dataset_id="ds-zero",
+    )
+    assert golden["time_split_hash"]
+

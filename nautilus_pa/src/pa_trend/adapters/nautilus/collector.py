@@ -26,7 +26,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
@@ -138,6 +138,13 @@ class BarCollectorConfig(DataActorConfig):
 class MultiTimeframeBarCollector(DataActor):
     """把单个合约的多种 K 线采集到 Parquet 数据目录。"""
 
+    # 补齐完成回调的计数与句柄。声明在类上，使绕过 __init__ 构造的实例
+    # （例如单元测试）也能安全地走补齐统计路径；运行时值为实例属性。
+    _backfill_done_callback: Callable[[], None] | None = None
+    _startup_requests: int = 0
+    _startup_responses: int = 0
+    _backfill_done_fired: bool = False
+
     def __init__(self, config: BarCollectorConfig) -> None:
         """初始化采集器。
 
@@ -168,6 +175,12 @@ class MultiTimeframeBarCollector(DataActor):
         self._close_timers: set[str] = set()
         # 单次收盘补拉最多请求几个周期，防止长停机后一次拉取过多历史。
         self._max_close_fetch_periods = 60
+        # 启动补齐的完成回调：全部 K 线的历史响应都已落盘后调用一次。
+        # 补齐后即退出的短进程模式用它来决定何时停止节点。
+        self._backfill_done_callback: Callable[[], None] | None = None
+        self._startup_requests: int = 0
+        self._startup_responses: int = 0
+        self._backfill_done_fired: bool = False
 
         self._load_existing_bars()
 
@@ -206,6 +219,10 @@ class MultiTimeframeBarCollector(DataActor):
         self.log.info(f"Instrument ready: {instrument_id}")
         now = self._now()
 
+        # 补齐从零开始计数：先前与本次启动无关的请求不计入完成判定。
+        self._startup_requests = 0
+        self._startup_responses = 0
+        self._backfill_done_fired = False
         for key, bar_type in self._bar_type_by_key.items():
             self.subscribe_bars(bar_type)
             try:
@@ -215,6 +232,12 @@ class MultiTimeframeBarCollector(DataActor):
             except Exception:
                 # 单个周期回补失败不能让其余周期失去订阅与回补机会。
                 self.log.exception(f"Backfill failed at startup: {key}")
+        # 没有任何请求（目录已是最新）时也要通知，否则等待方会一直空转。
+        self._maybe_fire_backfill_done()
+
+    def set_backfill_done_callback(self, callback: Callable[[], None] | None) -> None:
+        """注册启动补齐完成的回调（须在节点启动前调用）。"""
+        self._backfill_done_callback = callback
 
     def _resume_start(self, key: str) -> datetime:
         """按已存历史与停机时长推算回补起点。
@@ -346,6 +369,7 @@ class MultiTimeframeBarCollector(DataActor):
                 self.log.info(f"Stop backfill {key}: cursor {cursor} >= now {cutoff}")
                 break
             self.log.info(f"Request bars {key}: start={cursor} end={chunk_end}")
+            self._startup_requests += 1
             self.request_bars(bar_type=bar_type, start=cursor, end=chunk_end)
             if chunk_end >= end or chunk_end >= cutoff:
                 break
@@ -368,6 +392,27 @@ class MultiTimeframeBarCollector(DataActor):
                 counts[key] = counts.get(key, 0) + 1
 
         self.log.info(f"Historical response: received={len(bars)} accepted_by_type={counts}")
+        self._note_startup_response()
+
+    def _note_startup_response(self) -> None:
+        """登记一次历史响应，并在全部补齐请求都已落盘后触发完成回调。"""
+        self._startup_responses += 1
+        self._maybe_fire_backfill_done()
+
+    def _maybe_fire_backfill_done(self) -> None:
+        """当启动补齐的请求与响应数量对齐时，通知等待方补齐已结束。"""
+        if self._backfill_done_fired or self._backfill_done_callback is None:
+            return
+        if self._startup_responses < self._startup_requests:
+            return
+        self._backfill_done_fired = True
+        # 先把缓冲区的内容写盘，再通知：调用方收到回调时可以立刻读目录。
+        self._flush_completed_bars()
+        self.log.info(
+            "Startup backfill complete: "
+            f"requests={self._startup_requests} responses={self._startup_responses}",
+        )
+        self._backfill_done_callback()
 
     def on_bar(self, bar: Bar) -> None:
         """缓存已收盘的实时 K 线，并在发现缺口时请求回补。"""
@@ -615,6 +660,7 @@ def build_live_node(
     catalog_path: str,
     proxy_url: str | None = None,
     session_offset_minutes: int = 8 * 60,
+    on_backfill_done: Callable[[], None] | None = None,
 ) -> LiveNode:
     """构建已接入 OKX 数据客户端与采集器的实盘节点。
 
@@ -634,6 +680,9 @@ def build_live_node(
         Parquet 数据目录。
     proxy_url : str 或 None
         OKX 客户端可选的 HTTP 代理。
+    on_backfill_done : callable 或 None
+        启动补齐全部落盘后调用一次，供「补齐后即退出」的短进程模式
+        决定何时停止节点。``None`` 表示常驻采集，不关心补齐完成时刻。
 
     返回
     ----
@@ -667,5 +716,7 @@ def build_live_node(
             session_offset_minutes=session_offset_minutes,
         ),
     )
+    if on_backfill_done is not None:
+        collector.set_backfill_done_callback(on_backfill_done)
     node.add_actor(collector)
     return node

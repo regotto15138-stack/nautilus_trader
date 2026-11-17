@@ -54,6 +54,10 @@
     project: null,
     annotations: [],
     projectAnnotations: [],
+    annotationFilter: { search: "", timeFrom: "", timeTo: "" },
+    undoStack: [],
+    redoStack: [],
+    stateBandCanvas: null,
     groundTruthCount: 0,
     goldenDatasets: [],
     zoneMode: "ANCHOR_ONLY",
@@ -90,7 +94,11 @@
       busy: false,
       appliedAt: 0,
       error: null,
-      info: null
+      info: null,
+      // 按需补齐：点击「实时」触发一次采集器补数。
+      syncing: false,
+      syncError: null,
+      lastSync: null
     },
     // 向左滚动加载更早历史：只追加 K 线，叠加层保持服务端最新一版。
     view: {
@@ -106,6 +114,7 @@
   };
 
   var el = {};
+  var annotationFilterTimer = null;
 
   /* -------------------------------------------------------------- 工具函数 */
 
@@ -129,9 +138,18 @@
       init.body = JSON.stringify(opts.body);
     }
     return fetch(path, init).then(function (response) {
-      return response.json().then(function (envelope) {
+      return response.text().then(function (text) {
+        var envelope = null;
+        if (text) {
+          try {
+            envelope = JSON.parse(text);
+          } catch (error) {
+            throw new Error("HTTP " + response.status + " · 响应不是合法 JSON");
+          }
+        }
         if (!response.ok || (envelope && envelope.error)) {
-          var message = envelope && envelope.error ? envelope.error.code + ": " + envelope.error.message
+          var message = envelope && envelope.error
+            ? envelope.error.code + ": " + envelope.error.message
             : "HTTP " + response.status;
           throw new Error(message);
         }
@@ -206,6 +224,29 @@
     return node;
   }
 
+  /* 用统一样式渲染一组 KPI 卡；items: [{label, value, note, tone}]。 */
+  function renderKpis(container, items) {
+    if (!container) return;
+    clear(container);
+    items.forEach(function (item) {
+      var card = makeEl("div", "kpi" + (item.tone ? " " + item.tone : ""));
+      card.appendChild(makeEl("div", "kpi-label", item.label));
+      card.appendChild(makeEl("div", "kpi-value", item.value));
+      if (item.note) card.appendChild(makeEl("div", "kpi-note", item.note));
+      if (item.title) card.title = item.title;
+      container.appendChild(card);
+    });
+  }
+
+  /* 回归状态既可能是 PASSED/FAILED，也可能是 BLOCKED_BY_*；筛选与统计按组归一。 */
+  function caseStatusGroup(status) {
+    var text = String(status || "READY");
+    if (text === "PASSED" || text === "FAILED") return text;
+    if (text.indexOf("BLOCKED") === 0) return "BLOCKED";
+    if (text === "READY" || text === "UNKNOWN") return "READY";
+    return text;
+  }
+
   function clear(node) {
     if (node) node.textContent = "";
   }
@@ -254,6 +295,10 @@
   }
 
   function destroyCharts() {
+    if (state.stateBandCanvas) {
+      try { state.stateBandCanvas.remove(); } catch (err) { /* 已移除 */ }
+      state.stateBandCanvas = null;
+    }
     if (state.priceChart) { state.priceChart.remove(); state.priceChart = null; }
     if (state.atrChart) { state.atrChart.remove(); state.atrChart = null; }
     state.series = {};
@@ -412,6 +457,7 @@
   function resizeCharts() {
     resizeChart(state.priceChart, el.priceChart, "price");
     if (state.toggles.atr) resizeChart(state.atrChart, el.atrChart, "atr");
+    drawStateBands();
   }
 
   function bindResize() {
@@ -730,16 +776,7 @@
     var color = "#ce93d8";
     state.annotations.forEach(function (annotation) {
       var payload = annotation.payload || {};
-      if (annotation.entity_type === "STATE_INTERVAL") {
-      return payload.state + " · " + payload.valid_from + " → " +
-        (payload.valid_to || "—") + " · known " + (payload.known_at || "—");
-    }
-    if (annotation.entity_type === "PROTECTED_POINT") {
-      return "Protected" + (payload.direction === "HIGH" ? "High" : "Low") +
-        " " + payload.price + " · " + (payload.event_type || "INIT") +
-        " · " + payload.valid_from;
-    }
-    if (annotation.entity_type === "ZONE") {
+      if (annotation.entity_type === "ZONE") {
         var anchorPoints = (payload.anchor_swing_ids || []).map(function (id) {
           return swings[id];
         }).filter(Boolean);
@@ -780,6 +817,84 @@
           title: "M Protected" + (payload.direction === "HIGH" ? "High" : "Low")
         }));
       }
+    });
+  }
+
+  /* ---------------------------------------------------- 状态区间背景色带 */
+
+  var STATE_BAND_COLORS = {
+    UP: [38, 166, 154],
+    DOWN: [239, 83, 80],
+    WARN: [255, 183, 77],
+    NEUTRAL: [120, 130, 150]
+  };
+
+  function stateBandColor(name, alpha) {
+    var key = BULL_STATES[name] ? "UP" : BEAR_STATES[name] ? "DOWN"
+      : WARN_STATES[name] ? "WARN" : "NEUTRAL";
+    var rgb = STATE_BAND_COLORS[key];
+    return "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + alpha + ")";
+  }
+
+  /* Lightweight Charts 没有区间色带图元；用一层透明 canvas 按时间坐标绘制。
+   * canvas 只做显示，不影响标注数据（SACW 3.4E）。 */
+  function ensureStateBandCanvas() {
+    if (!el.priceChart) return null;
+    var canvas = state.stateBandCanvas;
+    if (!canvas || !document.body.contains(canvas)) {
+      canvas = document.createElement("canvas");
+      canvas.className = "state-bands";
+      canvas.setAttribute("aria-hidden", "true");
+      el.priceChart.appendChild(canvas);
+      state.stateBandCanvas = canvas;
+    }
+    return canvas;
+  }
+
+  function drawStateBands() {
+    if (!state.priceChart) return;
+    var canvas = ensureStateBandCanvas();
+    if (!canvas) return;
+    var rect = el.priceChart.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var width = Math.max(1, Math.round(rect.width));
+    var height = Math.max(1, Math.round(rect.height));
+    if (canvas.width !== Math.round(width * dpr) ||
+        canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    var ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    if (!state.toggles.manual) return;
+    var section = currentSection();
+    if (!section || !section.candles || !section.candles.length) return;
+    var lastTime = section.candles[section.candles.length - 1].time;
+    var timeScale = state.priceChart.timeScale();
+    state.annotations.forEach(function (annotation) {
+      if (annotation.entity_type !== "STATE_INTERVAL") return;
+      var payload = annotation.payload || {};
+      var from = isoToChartTime(payload.valid_from);
+      var to = payload.valid_to ? isoToChartTime(payload.valid_to) : lastTime;
+      if (from === null || to === null || to < from) return;
+      var x1 = timeScale.timeToCoordinate(from);
+      var x2 = timeScale.timeToCoordinate(to);
+      if (x1 === null || x2 === null) return;
+      var left = Math.min(x1, x2);
+      var right = Math.max(x1, x2);
+      if (right - left < 2) right = left + 2;
+      ctx.fillStyle = stateBandColor(payload.state, 0.12);
+      ctx.fillRect(left, 0, right - left, height);
+      ctx.fillStyle = stateBandColor(payload.state, 0.55);
+      ctx.fillRect(left, 0, 1, height);
+      ctx.fillRect(right - 1, 0, 1, height);
+      ctx.fillStyle = stateBandColor(payload.state, 0.85);
+      ctx.font = "11px sans-serif";
+      ctx.fillText(String(payload.state || ""), left + 3, 12);
     });
   }
 
@@ -983,6 +1098,7 @@
     else clearPriceLines();
     drawReversalThreshold();
     drawManualAnnotations();
+    drawStateBands();
     refreshMarkers();
     resizeCharts();
   }
@@ -1176,6 +1292,12 @@
       payload.invalidated_at = validFrom;
       payload.invalidation_reason = "MANUAL_INVALIDATION";
     }
+    var sameDirection = sectionSwings().filter(function (item) {
+      return item.direction === direction && item.time <= bar.time;
+    });
+    var sourceSwing = sameDirection.length ? sameDirection[sameDirection.length - 1] : null;
+    payload.source_swing_id = sourceSwing ? sourceSwing.id : "";
+    if (sourceSwing) payload.source_swing_price = String(sourceSwing.price);
     state.pending = {
       kind: "PROTECTED_POINT",
       payload: payload,
@@ -1269,6 +1391,7 @@
       var occurredIso = new Date(first.occurredBar.time * 1000).toISOString();
       state.pending = {
         kind: "SWING_POINT",
+        originalPrice: first.price.toFixed(2),
         payload: {
           direction: first.direction,
           price: first.price.toFixed(2),
@@ -1599,6 +1722,8 @@
     if (state.pending.hint) {
       el.pendingAnnotation.appendChild(makeEl("div", "hint", state.pending.hint));
     }
+    var extra = pendingExtraControls();
+    if (extra) el.pendingAnnotation.appendChild(extra);
     var ops = makeEl("div", "ops");
     var submit = makeEl("button", null, "保存草稿（DRAFT）");
     submit.disabled = state.pending.valid === false;
@@ -1615,6 +1740,72 @@
     ops.appendChild(submit);
     ops.appendChild(cancel);
     el.pendingAnnotation.appendChild(ops);
+  }
+
+  /* 待提交面板里的对象级属性：Swing 可手动改价，保护点可选择来源 Swing。 */
+  function pendingExtraControls() {
+    var pending = state.pending;
+    if (!pending) return null;
+    if (pending.kind === "SWING_POINT") {
+      var wrap = makeEl("div", "pending-extra");
+      var priceLabel = makeEl("label", "field inline");
+      priceLabel.appendChild(makeEl("span", null, "价格（可改）"));
+      var priceInput = makeEl("input");
+      priceInput.type = "text";
+      priceInput.value = pending.payload.price;
+      priceLabel.appendChild(priceInput);
+      var reasonLabel = makeEl("label", "field inline hidden");
+      reasonLabel.appendChild(makeEl("span", null, "改价原因"));
+      var reasonInput = makeEl("input");
+      reasonInput.type = "text";
+      reasonLabel.appendChild(reasonInput);
+      var sync = function () {
+        var value = String(priceInput.value || "").trim();
+        var changed = value !== pending.originalPrice;
+        pending.payload.price = value;
+        pending.payload.manual_price_override = changed;
+        reasonLabel.className = changed ? "field inline" : "field inline hidden";
+        if (changed) {
+          pending.payload.override_reason = String(reasonInput.value || "").trim();
+        } else {
+          delete pending.payload.override_reason;
+        }
+      };
+      priceInput.addEventListener("input", sync);
+      reasonInput.addEventListener("input", sync);
+      wrap.appendChild(priceLabel);
+      wrap.appendChild(reasonLabel);
+      return wrap;
+    }
+    if (pending.kind === "PROTECTED_POINT") {
+      var box = makeEl("div", "pending-extra");
+      var label = makeEl("label", "field inline");
+      label.appendChild(makeEl("span", null, "来源 SwingPoint"));
+      var select = makeEl("select");
+      var options = sectionSwings().filter(function (item) {
+        return item.direction === pending.payload.direction;
+      });
+      if (!options.length) {
+        var empty = makeEl("option", null, "无同向已确认摆动点");
+        empty.value = "";
+        select.appendChild(empty);
+      }
+      options.slice(-30).forEach(function (item) {
+        var option = makeEl("option", null,
+          (item.direction === "HIGH" ? "H " : "L ") + fmt(item.price) +
+          " · " + fmtTime(item.time));
+        option.value = item.id;
+        select.appendChild(option);
+      });
+      select.value = pending.payload.source_swing_id || "";
+      select.addEventListener("change", function () {
+        pending.payload.source_swing_id = select.value;
+      });
+      label.appendChild(select);
+      box.appendChild(label);
+      return box;
+    }
+    return null;
   }
 
   function validateNStructure(payload) {
@@ -1637,6 +1828,15 @@
     var kind = state.pending.kind;
     var payload = Object.assign({}, state.pending.payload);
 
+    if (kind === "SWING_POINT" && payload.manual_price_override &&
+        !String(payload.override_reason || "").trim()) {
+      setStatus("手动改价必须填写改价原因", el.annotationStatus);
+      return;
+    }
+    if (kind === "PROTECTED_POINT" && !String(payload.source_swing_id || "").trim()) {
+      setStatus("保护点必须选择来源 SwingPoint", el.annotationStatus);
+      return;
+    }
     if (kind === "N_STRUCTURE") {
       var problem = validateNStructure(payload);
       if (problem) {
@@ -1688,12 +1888,18 @@
 
   function loadAnnotations() {
     if (!state.project) return Promise.resolve();
+    var filter = state.annotationFilter;
+    var params = "?timeframe=" + encodeURIComponent(state.tf);
+    if (filter.search) params += "&search=" + encodeURIComponent(filter.search);
+    if (filter.timeFrom) params += "&time_from=" + encodeURIComponent(filter.timeFrom);
+    if (filter.timeTo) params += "&time_to=" + encodeURIComponent(filter.timeTo);
     return api("/api/v1/annotation-projects/" + state.project.project_id +
-      "/annotations?timeframe=" + encodeURIComponent(state.tf))
+      "/annotations" + params)
       .then(function (data) {
         state.annotations = data.annotations || [];
         renderAnnotations();
         drawManualAnnotations();
+        drawStateBands();
         refreshMarkers();
       })
       .catch(function (error) {
@@ -1720,16 +1926,67 @@
     });
     var groundTruth = (counts.APPROVED || 0) + (counts.FROZEN || 0);
     state.groundTruthCount = groundTruth;
-    var names = ["DRAFT", "SUBMITTED", "REVIEWED", "APPROVED", "FROZEN",
-      "REJECTED", "AMBIGUOUS"];
-    var parts = names
-      .filter(function (name) { return counts[name]; })
-      .map(function (name) { return name + " " + counts[name]; });
+
+    var stages = ["DRAFT", "SUBMITTED", "REVIEWED", "APPROVED", "FROZEN"];
+    var labels = {
+      DRAFT: "草稿", SUBMITTED: "待审", REVIEWED: "已审",
+      APPROVED: "批准", FROZEN: "冻结",
+      REJECTED: "拒绝", AMBIGUOUS: "歧义"
+    };
     if (el.annotationSummary) {
-      el.annotationSummary.textContent = "项目标注：" +
-        (parts.length ? parts.join(" · ") : "尚无标注") +
-        " · 可冻结 " + groundTruth;
+      el.annotationSummary.textContent = "共 " +
+        state.projectAnnotations.length + " 条 · 可冻结 " + groundTruth;
+      el.annotationSummary.title = "DRAFT → SUBMITTED → REVIEWED → APPROVED → FROZEN；" +
+        "只有冻结后的标注计入 Ground Truth";
     }
+
+    if (el.projectBreakdown) {
+      clear(el.projectBreakdown);
+      var total = state.projectAnnotations.length;
+      stages.forEach(function (name) {
+        var chip = makeEl("span", "stage" + (counts[name] ? "" : " zero"));
+        chip.appendChild(makeEl("b", null, counts[name] || 0));
+        chip.appendChild(makeEl("span", null, labels[name] + " " + name));
+        chip.title = name + "：" + (counts[name] || 0) + " 条";
+        el.projectBreakdown.appendChild(chip);
+      });
+      ["REJECTED", "AMBIGUOUS"].forEach(function (name) {
+        if (!counts[name]) return;
+        var chip = makeEl("span", "stage");
+        chip.appendChild(makeEl("b", null, counts[name]));
+        chip.appendChild(makeEl("span", null, labels[name] + " " + name));
+        el.projectBreakdown.appendChild(chip);
+      });
+      el.projectBreakdown.title = "共 " + total + " 条标注";
+    }
+
+    if (el.projectProgress) {
+      clear(el.projectProgress);
+      var sum = stages.reduce(function (acc, name) {
+        return acc + (counts[name] || 0);
+      }, 0);
+      el.projectProgress.title = "草稿 " + (counts.DRAFT || 0) +
+        " · 待审 " + (counts.SUBMITTED || 0) +
+        " · 已审 " + (counts.REVIEWED || 0) +
+        " · 批准 " + (counts.APPROVED || 0) +
+        " · 冻结 " + (counts.FROZEN || 0);
+      if (!sum) {
+        el.projectProgress.appendChild(makeEl("span", "seg-DRAFT"));
+        el.projectProgress.firstChild.style.width = "100%";
+        el.projectProgress.style.opacity = ".4";
+      } else {
+        el.projectProgress.style.opacity = "1";
+        stages.forEach(function (name) {
+          var count = counts[name] || 0;
+          if (!count) return;
+          var seg = makeEl("span", "seg-" + name);
+          seg.style.width = (count / sum * 100) + "%";
+          seg.title = labels[name] + " " + name + "：" + count;
+          el.projectProgress.appendChild(seg);
+        });
+      }
+    }
+
     var canFreeze = groundTruth > 0;
     [el.freezeGolden, el.freezeGolden2].forEach(function (button) {
       if (!button) return;
@@ -1773,13 +2030,53 @@
     return JSON.stringify(payload).slice(0, 90);
   }
 
+  /* 标注对象的“对象时间”：Swing 用发生时间，区间/保护点用 valid_from。 */
+  function annotationTime(annotation) {
+    var payload = annotation.payload || {};
+    return payload.occurred_at || payload.valid_from || annotation.created_at || "";
+  }
+
+  function filteredAnnotations() {
+    var filter = state.annotationFilter;
+    var search = String(filter.search || "").trim().toLowerCase();
+    var from = String(filter.timeFrom || "");
+    var to = String(filter.timeTo || "");
+    return state.annotations.filter(function (annotation) {
+      var stamp = String(annotationTime(annotation));
+      var day = stamp.slice(0, 10);
+      if (from && day && day < from) return false;
+      if (to && day && day > to) return false;
+      if (!search) return true;
+      var haystack = [
+        annotation.annotation_id,
+        annotation.entity_type,
+        annotation.timeframe,
+        annotation.status,
+        annotation.label_source,
+        JSON.stringify(annotation.payload || {})
+      ].join(" ").toLowerCase();
+      return haystack.indexOf(search) >= 0;
+    });
+  }
+
   function renderAnnotations() {
     clear(el.annotationList);
+    var visible = filteredAnnotations();
+    if (el.annotationListCount) {
+      el.annotationListCount.textContent = visible.length + " / " +
+        state.annotations.length + " 条";
+    }
     if (!state.annotations.length) {
-      el.annotationList.appendChild(makeEl("li", "empty", "本周期暂无标注。"));
+      el.annotationList.appendChild(makeEl("li", "empty",
+        "本周期暂无标注。先在「标注工具」选择工具，再在图上点击；保存后为 DRAFT。"));
       return;
     }
-    state.annotations.slice().reverse().forEach(function (annotation) {
+    if (!visible.length) {
+      el.annotationList.appendChild(makeEl("li", "empty",
+        "没有匹配当前筛选条件的标注；清除筛选后可看到全部。"));
+      return;
+    }
+    visible.slice().reverse().forEach(function (annotation) {
       var li = makeEl("li");
       var row = makeEl("div", "row");
       row.appendChild(makeEl("span", "mono", annotation.entity_type + " " + shortId(annotation.annotation_id)));
@@ -1796,17 +2093,17 @@
       if (annotation.entity_type === "SWING_POINT") {
         meta.appendChild(makeEl("span", "badge-source",
           payload.confirmation_policy || "HUMAN_JUDGED"));
+        if (payload.manual_price_override) {
+          var overrideBadge = makeEl("span", "badge-warn",
+            "人工改价 · " + (payload.override_reason || "未填原因"));
+          meta.appendChild(overrideBadge);
+        }
       }
-      if (annotation.entity_type === "STATE_INTERVAL") {
-      return payload.state + " · " + payload.valid_from + " → " +
-        (payload.valid_to || "—") + " · known " + (payload.known_at || "—");
-    }
-    if (annotation.entity_type === "PROTECTED_POINT") {
-      return "Protected" + (payload.direction === "HIGH" ? "High" : "Low") +
-        " " + payload.price + " · " + (payload.event_type || "INIT") +
-        " · " + payload.valid_from;
-    }
-    if (annotation.entity_type === "ZONE") {
+      if (annotation.entity_type === "PROTECTED_POINT" && payload.source_swing_id) {
+        meta.appendChild(makeEl("span", "badge-source",
+          "来源 " + shortId(payload.source_swing_id)));
+      }
+      if (annotation.entity_type === "ZONE") {
         meta.appendChild(makeEl("span", "badge-source",
           payload.annotation_mode || "ANCHOR_ONLY"));
       }
@@ -1824,6 +2121,18 @@
         });
         actions.appendChild(button);
       });
+      if (annotation.status !== "FROZEN") {
+        var edit = makeEl("button", "ghost", "编辑");
+        edit.addEventListener("click", function () {
+          openAnnotationEditor(annotation);
+        });
+        actions.appendChild(edit);
+      }
+      var duplicate = makeEl("button", "ghost", "复制");
+      duplicate.addEventListener("click", function () {
+        copyAnnotation(annotation.annotation_id);
+      });
+      actions.appendChild(duplicate);
       var revisions = makeEl("button", "ghost", "修订历史");
       revisions.addEventListener("click", function () {
         showRevisions(annotation.annotation_id);
@@ -1879,6 +2188,266 @@
       }).join(" "), el.annotationStatus);
     }).catch(function (error) {
       setStatus("修订读取失败：" + error.message, el.annotationStatus);
+    });
+  }
+
+  /* ---------------------------------------------------- 标注编辑 / 复制 / 撤销 */
+
+  var EDIT_FIELDS = {
+    SWING_POINT: [
+      { key: "direction", label: "方向", type: "select", options: ["HIGH", "LOW"] },
+      { key: "price", label: "价格" },
+      { key: "occurred_at", label: "发生时间" },
+      { key: "confirmed_at", label: "确认时间" },
+      { key: "override_reason", label: "改价原因（价格变化时必填）" },
+      { key: "note", label: "备注" }
+    ],
+    N_STRUCTURE: [
+      { key: "direction", label: "方向", type: "select", options: ["BULLISH", "BEARISH"] },
+      { key: "status", label: "结构状态", type: "select",
+        options: ["CONFIRMED", "ACTIVE", "INVALIDATED", "EXPIRED"] },
+      { key: "valid_from", label: "生效时间" },
+      { key: "confirmed_at", label: "确认时间" },
+      { key: "note", label: "备注" }
+    ],
+    ZONE: [
+      { key: "state", label: "Zone 状态", type: "select",
+        options: ["CREATED", "ACTIVE", "TESTED", "BROKEN", "INVALIDATED"] },
+      { key: "human_lower", label: "人工 Lower" },
+      { key: "human_upper", label: "人工 Upper" },
+      { key: "human_center", label: "人工 Center" },
+      { key: "note", label: "备注" }
+    ],
+    PROTECTED_POINT: [
+      { key: "direction", label: "方向", type: "select", options: ["HIGH", "LOW"] },
+      { key: "price", label: "价格" },
+      { key: "event_type", label: "事件", type: "select",
+        options: ["INIT", "UPDATE", "INVALIDATE"] },
+      { key: "valid_from", label: "有效开始" },
+      { key: "valid_to", label: "有效结束" },
+      { key: "source_swing_id", label: "来源 SwingPoint ID" },
+      { key: "invalidation_reason", label: "失效原因" }
+    ],
+    STATE_INTERVAL: [
+      { key: "state", label: "状态", type: "select", options: [] },
+      { key: "valid_from", label: "开始时间" },
+      { key: "valid_to", label: "结束时间" },
+      { key: "known_at", label: "可知时间" },
+      { key: "reason_code", label: "原因码" }
+    ]
+  };
+
+  function closeAnnotationEditor() {
+    var existing = document.querySelector(".modal-backdrop");
+    if (existing) existing.remove();
+  }
+
+  function openAnnotationEditor(annotation) {
+    closeAnnotationEditor();
+    var payload = annotation.payload || {};
+    var backdrop = makeEl("div", "modal-backdrop");
+    var panel = makeEl("div", "modal");
+    panel.appendChild(makeEl("div", "modal-title",
+      "编辑 " + annotation.entity_type + " · " + shortId(annotation.annotation_id) +
+      " · rev " + annotation.revision));
+    var form = makeEl("div", "modal-form");
+    var inputs = {};
+    var fields = (EDIT_FIELDS[annotation.entity_type] || []).slice();
+    if (annotation.entity_type === "STATE_INTERVAL") {
+      fields[0].options = STATE_OPTIONS[annotation.timeframe] || [];
+    }
+    fields.forEach(function (field) {
+      var label = makeEl("label", "field inline");
+      label.appendChild(makeEl("span", null, field.label));
+      var input;
+      if (field.type === "select") {
+        input = makeEl("select");
+        field.options.forEach(function (name) {
+          var option = makeEl("option", null, name);
+          option.value = name;
+          input.appendChild(option);
+        });
+        if (payload[field.key] !== undefined) input.value = String(payload[field.key]);
+      } else {
+        input = makeEl("input");
+        input.type = "text";
+        input.value = payload[field.key] === undefined || payload[field.key] === null
+          ? "" : String(payload[field.key]);
+      }
+      input.dataset.key = field.key;
+      inputs[field.key] = input;
+      label.appendChild(input);
+      form.appendChild(label);
+    });
+    var rawLabel = makeEl("label", "field");
+    rawLabel.appendChild(makeEl("span", null, "完整载荷 JSON"));
+    var raw = makeEl("textarea", "modal-raw");
+    raw.value = JSON.stringify(payload, null, 2);
+    rawLabel.appendChild(raw);
+    form.appendChild(rawLabel);
+    panel.appendChild(form);
+    var problem = makeEl("p", "modal-error");
+    panel.appendChild(problem);
+    var ops = makeEl("div", "ops");
+    var save = makeEl("button", null, "保存修订");
+    var cancel = makeEl("button", "ghost", "取消");
+    cancel.addEventListener("click", closeAnnotationEditor);
+    save.addEventListener("click", function () {
+      saveAnnotationEdit(annotation, inputs, raw, problem, save);
+    });
+    ops.appendChild(save);
+    ops.appendChild(cancel);
+    panel.appendChild(ops);
+    backdrop.appendChild(panel);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) closeAnnotationEditor();
+    });
+    document.body.appendChild(backdrop);
+    var first = form.querySelector("input, select");
+    if (first) first.focus();
+  }
+
+  function saveAnnotationEdit(annotation, inputs, raw, problem, saveButton) {
+    var payload;
+    try {
+      payload = JSON.parse(raw.value);
+    } catch (error) {
+      problem.textContent = "载荷 JSON 无法解析：" + error.message;
+      return;
+    }
+    Object.keys(inputs).forEach(function (key) {
+      var value = String(inputs[key].value || "");
+      if (value === "") {
+        delete payload[key];
+      } else {
+        payload[key] = value;
+      }
+    });
+    if (annotation.entity_type === "SWING_POINT") {
+      var newPrice = String(payload.price || "");
+      var oldPrice = String((annotation.payload || {}).price || "");
+      if (newPrice !== oldPrice) {
+        payload.manual_price_override = true;
+        if (!String(payload.override_reason || "").trim()) {
+          problem.textContent = "价格已修改：必须填写改价原因（manual_price_override）。";
+          return;
+        }
+      }
+    }
+    problem.textContent = "";
+    saveButton.disabled = true;
+    api("/api/v1/annotations/" + annotation.annotation_id, {
+      method: "PATCH",
+      body: {
+        payload: payload,
+        expected_revision: annotation.revision,
+        actor: "web",
+        reason: "edited from workbench"
+      }
+    }).then(function (updated) {
+      state.undoStack.push({
+        annotationId: annotation.annotation_id,
+        beforePayload: annotation.payload || {},
+        afterPayload: updated.payload || {},
+        label: annotation.entity_type
+      });
+      state.redoStack = [];
+      updateUndoButtons();
+      closeAnnotationEditor();
+      setStatus("已保存修订 r" + updated.revision + " · " +
+        shortId(annotation.annotation_id), el.annotationStatus);
+      loadAnnotations();
+      loadAudit();
+    }).catch(function (error) {
+      saveButton.disabled = false;
+      if (String(error.message).indexOf("REVISION_CONFLICT") >= 0) {
+        problem.textContent = "标注已被他人修改，请刷新后重试（当前 rev " +
+          annotation.revision + "）。";
+      } else {
+        problem.textContent = "保存失败：" + error.message;
+      }
+    });
+  }
+
+  function copyAnnotation(annotationId) {
+    api("/api/v1/annotations/" + annotationId + "/copy", {
+      method: "POST",
+      body: { actor: "web", reason: "copied from workbench" }
+    }).then(function (copied) {
+      setStatus("已复制为 DRAFT " + shortId(copied.annotation_id) +
+        " · rev " + copied.revision, el.annotationStatus);
+      loadAnnotations();
+      loadProjectSummary();
+      loadAudit();
+    }).catch(function (error) {
+      setStatus("复制失败：" + error.message, el.annotationStatus);
+    });
+  }
+
+  function updateUndoButtons() {
+    if (el.annotationUndo) {
+      el.annotationUndo.disabled = state.undoStack.length === 0;
+      el.annotationUndo.title = state.undoStack.length
+        ? "撤销上一次标注编辑" : "没有可撤销的标注编辑";
+    }
+    if (el.annotationRedo) {
+      el.annotationRedo.disabled = state.redoStack.length === 0;
+      el.annotationRedo.title = state.redoStack.length
+        ? "重做上一次标注编辑" : "没有可重做的标注编辑";
+    }
+  }
+
+  function applyAnnotationHistory(direction) {
+    var from = direction === "undo" ? state.undoStack : state.redoStack;
+    var to = direction === "undo" ? state.redoStack : state.undoStack;
+    var entry = from.pop();
+    if (!entry) return;
+    var targetPayload = direction === "undo" ? entry.beforePayload : entry.afterPayload;
+    api("/api/v1/annotations/" + entry.annotationId).then(function (current) {
+      if (current.status === "FROZEN") {
+        throw new Error("FROZEN 标注不能撤销/重做");
+      }
+      return api("/api/v1/annotations/" + entry.annotationId, {
+        method: "PATCH",
+        body: {
+          payload: targetPayload,
+          expected_revision: current.revision,
+          actor: "web",
+          reason: direction === "undo" ? "undo annotation edit" : "redo annotation edit"
+        }
+      });
+    }).then(function (updated) {
+      to.push(entry);
+      updateUndoButtons();
+      setStatus((direction === "undo" ? "已撤销" : "已重做") + " " + entry.label +
+        " · " + shortId(entry.annotationId) + " → r" + updated.revision,
+        el.annotationStatus);
+      loadAnnotations();
+      loadAudit();
+    }).catch(function (error) {
+      from.push(entry);
+      updateUndoButtons();
+      setStatus("撤销/重做失败：" + error.message + "；请刷新标注后再试",
+        el.annotationStatus);
+    });
+  }
+
+  function autoSplitGolden() {
+    var golden = state.goldenDatasets[state.goldenDatasets.length - 1];
+    if (!golden) {
+      setStatus("需先冻结黄金样本，才能登记时间切分", el.splitStatus);
+      return;
+    }
+    api("/api/v1/golden-datasets/" + golden.golden_dataset_id + "/split", {
+      method: "POST",
+      body: { auto: true }
+    }).then(function (data) {
+      setStatus("已自动三分：" + data.splits.map(function (item) {
+        return item.split + " " + item.range_start.slice(0, 10) + "→" + item.range_end.slice(0, 10);
+      }).join(" · ") + " · time_split_hash " + String(data.time_split_hash).slice(0, 12),
+        el.splitStatus);
+    }).catch(function (error) {
+      setStatus("自动三分失败：" + error.message, el.splitStatus);
     });
   }
 
@@ -1950,9 +2519,17 @@
     clear(el.timeframeButtons);
     var frames = (state.payload && state.payload.timeframes) || [];
     frames.forEach(function (frame) {
-      var button = makeEl("button", frame.code === state.tf ? "active" : "");
-      button.appendChild(makeEl("span", null, frame.label + " (" + frame.code + ")"));
-      button.appendChild(makeEl("span", "tf-state " + stateClass(frame.state), frame.state || "—"));
+      var active = frame.code === state.tf;
+      var button = makeEl("button", active ? "active" : "");
+      button.type = "button";
+      button.dataset.timeframe = frame.code;
+      button.title = frame.label + " (" + frame.code + ") · " + (frame.state || "UNKNOWN") +
+        " · 摆动 " + (frame.swings || 0) + " · 结构 " + (frame.structures || 0);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+      button.appendChild(makeEl("span", "tf-dot " + stateClass(frame.state)));
+      button.appendChild(makeEl("span", null, frame.code));
+      button.appendChild(makeEl("span", "tf-state " + stateClass(frame.state),
+        frame.state || "—"));
       button.addEventListener("click", function () {
         if (state.tf === frame.code) return;
         selectTimeframe(frame.code);
@@ -2006,6 +2583,58 @@
       el.levels.appendChild(makeEl("dt", null, row[0]));
       el.levels.appendChild(makeEl("dd", null, row[1] === undefined ? "—" : String(row[1])));
     });
+
+    if (el.chartTf) el.chartTf.textContent = frame.code;
+    if (el.chartState) {
+      el.chartState.textContent = frame.state || "UNKNOWN";
+      el.chartState.title = "本周期状态：" + (frame.state || "UNKNOWN");
+      el.chartState.className = "state-chip " + stateClass(frame.state);
+    }
+    if (el.chartMeta) {
+      var meta = state.meta || {};
+      el.chartMeta.textContent = frame.bars + " 根 · " +
+        (frame.warm ? "指标就绪" : "指标预热中") +
+        (meta.sessionOffsetHours !== undefined && meta.sessionOffsetHours !== null
+          ? " · 会话 UTC+" + meta.sessionOffsetHours : "") +
+        (state.payload && state.payload.skippedBars
+          ? " · 跳过未对齐 " + state.payload.skippedBars : "");
+    }
+    if (el.structureTf) {
+      el.structureTf.textContent = frame.label + " (" + frame.code + ") · " +
+        (frame.state || "UNKNOWN");
+    }
+    if (el.priceChart) {
+      el.priceChart.setAttribute("aria-label",
+        "K 线主图：" + (state.payload && state.payload.instrumentId || "") +
+        " " + frame.code + "，共 " + frame.bars + " 根 K 线");
+    }
+    if (el.atrChart) {
+      el.atrChart.setAttribute("aria-label", "ATR14 副图：" + frame.code);
+    }
+    renderLegendIdle();
+  }
+
+  /* 没有十字光标时，图例显示最后一根 K 线的快照，避免首屏留白。 */
+  function renderLegendIdle() {
+    var section = currentSection();
+    var frame = currentFrame();
+    if (!section || !section.candles || !section.candles.length) return;
+    var last = section.candles[section.candles.length - 1];
+    var smaPoints = section.sma || [];
+    var sma = smaPoints.length ? smaPoints[smaPoints.length - 1] : null;
+    var atrPoints = section.atr || [];
+    var atr = atrPoints.length ? atrPoints[atrPoints.length - 1] : null;
+    el.legendOhlc.textContent = state.tf + "  " + fmtTime(last.time) +
+      "  O " + fmt(last.open) + "  H " + fmt(last.high) +
+      "  L " + fmt(last.low) + "  C " + fmt(last.close);
+    el.legendInd.textContent = "SMA22 " + (sma ? fmt(sma.value) : "N/A") +
+      "  · as_of " + fmtTime(last.closeTime) + "  · ATR_MA22 N/A / SPEC_AMBIGUITY";
+    var candidate = currentCandidateAt(last.time);
+    el.legendZigzag.textContent = candidate
+      ? "ZigZag " + candidate.direction + "  候选 " + fmt(candidate.price)
+      : "ZigZag " + ((frame && frame.zigzagDirection) || "—") + "  无候选";
+    el.legendAtr.textContent = "ATR14 " + (atr ? fmt(atr.value, 3) : "N/A") +
+      "  · ATR_MA22 N/A / SPEC_AMBIGUITY";
   }
 
   function renderZones() {
@@ -2075,14 +2704,40 @@
     var market = (state.payload && state.payload.market) || {};
     el.canOpen.textContent = "CanOpen " + (market.canOpen ? "TRUE" : "FALSE");
     el.canOpen.className = "pill " + (market.canOpen ? "pill-on" : "pill-off");
+    el.canOpen.title = market.canOpen
+      ? "CanOpen = TRUE：当前多周期环境允许开仓（识别层结论，非下单指令）"
+      : "CanOpen = FALSE：当前多周期环境不允许开仓（识别层结论）";
     el.canHold.textContent = "CanHold " + (market.canHold ? "TRUE" : "FALSE");
     el.canHold.className = "pill " + (market.canHold ? "pill-on" : "pill-off");
-    el.macroSummary.textContent =
-      "1M " + (market.month || "—") +
-      " · 1W " + (market.week || "—") +
-      " · 1D " + (market.day || "—") +
-      " · 4H " + (market.h4 || "—") +
-      " · 1H " + (market.h1 || "—");
+    el.canHold.title = market.canHold
+      ? "CanHold = TRUE：当前多周期环境允许持仓（识别层结论）"
+      : "CanHold = FALSE：当前多周期环境不允许持仓（识别层结论）";
+
+    var frames = [
+      ["1M", market.month], ["1W", market.week], ["1D", market.day],
+      ["4H", market.h4], ["1H", market.h1]
+    ];
+    var counts = { bull: 0, bear: 0, mixed: 0, unknown: 0 };
+    clear(el.macroSummary);
+    var detail = [];
+    frames.forEach(function (item) {
+      if (BULL_STATES[item[1]]) counts.bull += 1;
+      else if (BEAR_STATES[item[1]]) counts.bear += 1;
+      else if (WARN_STATES[item[1]]) counts.mixed += 1;
+      else counts.unknown += 1;
+      detail.push(item[0] + " " + (item[1] || "—"));
+    });
+    var parts = [];
+    if (counts.bull) parts.push(counts.bull + " 偏多");
+    if (counts.bear) parts.push(counts.bear + " 偏空");
+    if (counts.mixed) parts.push(counts.mixed + " 震荡");
+    if (counts.unknown) parts.push(counts.unknown + " 未定");
+    var note = makeEl("span", "macro-note",
+      "高周期一致性：" + (parts.join(" · ") || "—") +
+      "（1M/1W/1D/4H/1H，共 " + frames.length + " 个）");
+    note.title = detail.join("\n") +
+      "\n只统计方向状态，不代表交易信号；各周期状态相互独立（规格 2.1）";
+    el.macroSummary.appendChild(note);
   }
 
   function selectTimeframe(code) {
@@ -2134,43 +2789,140 @@
     return since;
   }
 
+  // 数据是否落后于当前 UTC：由服务端按目录里最后一根已收盘 K 线推算。
+  // 采集器没在跑时 changed 会一直是假，必须另看 stale，否则会把旧数据当成实时。
+  function isStale() {
+    var info = state.live.info;
+    if (!info) return false;
+    if (typeof info.stale === "boolean") return info.stale;
+    var fresh = info.freshness;
+    return !!(fresh && fresh.stale);
+  }
+
+  function staleHint() {
+    var info = state.live.info;
+    var fresh = info && info.freshness;
+    if (!fresh) return "";
+    var worst = fresh.worstTailMissingClosed || 0;
+    var names = (fresh.staleTimeframes || []).join("/");
+    if (!names) return "";
+    return names + (worst > 0 ? " 落后 " + worst + " 根" : " 有缺口");
+  }
+
   function updateLiveStatus(extra) {
     if (!el.liveStatus) return;
+    if (state.live.syncing) {
+      el.liveStatus.textContent = "正在补齐数据…";
+      el.liveStatus.className = "live syncing";
+      el.liveStatus.disabled = true;
+      el.liveStatus.title = "正在调用采集器补齐缺失的 K 线，完成后自动刷新图表";
+      return;
+    }
+    el.liveStatus.disabled = false;
+
     if (!state.live.enabled) {
       el.liveStatus.textContent = "实时刷新已暂停";
       el.liveStatus.className = "live paused";
+      el.liveStatus.title = "点击恢复轮询；点击「补齐」手动补数";
+      return;
+    }
+    if (state.live.syncError) {
+      el.liveStatus.textContent = "补齐失败：" + state.live.syncError;
+      el.liveStatus.className = "live error";
+      el.liveStatus.title = "点击重试补齐（" + state.live.syncError + "）";
       return;
     }
     if (state.live.error) {
       el.liveStatus.textContent = "实时刷新失败：" + state.live.error;
       el.liveStatus.className = "live error";
+      el.liveStatus.title = "轮询失败；点击立即重试";
       return;
     }
+
     var info = state.live.info;
     var parts = ["实时"];
-    if (state.live.appliedAt) {
-      parts.push("上次更新 " + new Date(state.live.appliedAt).toISOString().slice(11, 19) + "Z");
+    if (isStale()) {
+      parts.push("数据落后");
+      var hint = staleHint();
+      if (hint) parts.push(hint);
+      el.liveStatus.className = "live stale";
+      el.liveStatus.title = "目录里的 K 线落后于当前 UTC；点击调用采集器补齐";
     } else {
-      parts.push("等待新数据");
+      if (state.live.appliedAt) {
+        parts.push("上次更新 " + new Date(state.live.appliedAt).toISOString().slice(11, 19) + "Z");
+      } else {
+        parts.push("已追平");
+      }
+      el.liveStatus.className = "live ok";
+      el.liveStatus.title = "点击补齐缺失的 K 线（已收盘的才会补）";
     }
     if (extra) parts.push(extra);
+    if (state.live.lastSync && state.live.lastSync.ok && state.live.lastSync.addedBars > 0) {
+      parts.push("上次补齐 +" + state.live.lastSync.addedBars + " 根");
+    }
     if (info && typeof info.refreshIntervalSecs === "number") {
       parts.push("每 " + info.refreshIntervalSecs + " 秒");
     }
     el.liveStatus.textContent = parts.join(" · ");
-    el.liveStatus.className = "live ok";
-    el.liveStatus.title = "逐周期自服务端读取新落盘的已收盘 K 线；点击暂停或恢复";
   }
 
+  // 点击「实时」= 触发一次补齐，而不是暂停轮询。暂停改由按钮上的右键或
+  // Shift+点击提供，避免把「补数」和「停止实时」两个动作混在同一个手势里。
   function bindLiveToggle() {
     if (!el.liveStatus) return;
-    el.liveStatus.addEventListener("click", function () {
-      state.live.enabled = !state.live.enabled;
-      if (state.live.enabled) {
-        pollLive();
-      }
-      updateLiveStatus();
+    el.liveStatus.addEventListener("contextmenu", function (event) {
+      event.preventDefault();
+      toggleLivePaused();
     });
+    el.liveStatus.addEventListener("click", function (event) {
+      if (event.shiftKey) {
+        toggleLivePaused();
+        return;
+      }
+      requestSync();
+    });
+  }
+
+  function toggleLivePaused() {
+    state.live.enabled = !state.live.enabled;
+    if (state.live.enabled) {
+      pollLive();
+    }
+    updateLiveStatus();
+  }
+
+  // 按需补齐：调用采集器补数 → 成功后整页重载 K 线与全部指标。
+  // 指标与 K 线来自同一次历史回放，必须整体重建，不能只追加 K 线。
+  function requestSync() {
+    if (state.live.syncing) return;
+    state.live.syncing = true;
+    state.live.syncError = null;
+    updateLiveStatus();
+    api("/api/v1/market/sync", { method: "POST", body: {} })
+      .then(function (result) {
+        state.live.syncing = false;
+        state.live.lastSync = result;
+        if (!result.ok) {
+          state.live.syncError = result.message || result.status;
+          updateLiveStatus();
+          return;
+        }
+        // 补齐后目录已变：重建视图并把增量游标归零，避免漏掉中间补出来的 K 线。
+        state.live.since = null;
+        return loadPayload({ keepSelection: true }).then(function () {
+          state.live.appliedAt = Date.now();
+          state.live.since = liveCursor(state.payload);
+          loadAnnotations();
+          updateLiveStatus(result.message);
+        });
+      })
+      .catch(function (error) {
+        state.live.syncing = false;
+        var message = error.message || String(error);
+        // 409 表示已有任务在跑，不是失败；给出提示即可。
+        state.live.syncError = message.indexOf("SYNC_BUSY") === 0 ? null : message;
+        updateLiveStatus();
+      });
   }
 
   function scheduleLive(options) {
@@ -2183,6 +2935,7 @@
 
   function pollLive() {
     if (state.live.busy) return;
+    if (state.live.syncing) return;
     if (!state.payload) return;
     if (!state.live.enabled) {
       updateLiveStatus();
@@ -2198,7 +2951,14 @@
       state.live.info = data;
       if (data.changed) {
         applyLive(data);
+        // applyLive 会调用 updateLiveStatus，但数据是否落后以服务端 freshnes 为准，
+        // 这里再刷一次，确保徽章反映的是补齐后的真实状态。
+        updateLiveStatus();
+        scheduleLive({ interval: (data.refreshIntervalSecs || 5) * 1000 });
+        return;
       }
+      // 没有新数据时也要更新徽章：否则「数据落后」永远不会显示出来。
+      updateLiveStatus();
       scheduleLive({ interval: (data.refreshIntervalSecs || 5) * 1000 });
     }).catch(function (error) {
       state.live.busy = false;
@@ -2315,6 +3075,8 @@
     if (state.toggles.structure) drawStructures();
     drawLevelLines();
     drawReversalThreshold();
+    drawManualAnnotations();
+    drawStateBands();
     refreshMarkers();
   }
 
@@ -2388,7 +3150,13 @@
 
   function renderCoverage(coverage) {
     clear(el.coverageRows);
+    var stats = { bars: 0, gaps: 0, duplicates: 0, outOfOrder: 0, clean: 0 };
     coverage.forEach(function (row) {
+      stats.bars += Number(row.bars) || 0;
+      stats.gaps += Number(row.gaps) || 0;
+      stats.duplicates += Number(row.duplicates) || 0;
+      stats.outOfOrder += Number(row.outOfOrder) || 0;
+      if (row.clean) stats.clean += 1;
       var tr = makeEl("tr");
       tr.appendChild(makeEl("td", null, row.timeframe));
       tr.appendChild(makeEl("td", null, row.bars));
@@ -2400,6 +3168,15 @@
       tr.appendChild(makeEl("td", "mono", row.end || "—"));
       el.coverageRows.appendChild(tr);
     });
+    renderKpis(el.datasetKpis, [
+      { label: "周期", value: coverage.length, note: "1M…3M" },
+      { label: "总 K 线", value: stats.bars.toLocaleString("en-US"), note: "目录内已对齐 Bar" },
+      { label: "缺失", value: stats.gaps, note: "缺口总数", tone: stats.gaps ? "down" : "" },
+      { label: "异常", value: stats.duplicates + stats.outOfOrder,
+        note: "重复 + 乱序", tone: (stats.duplicates + stats.outOfOrder) ? "warn" : "" },
+      { label: "完整周期", value: stats.clean + " / " + coverage.length,
+        note: "通过完整性检查", tone: stats.clean === coverage.length ? "up" : "warn" }
+    ]);
   }
 
   function renderDatasetFacts() {
@@ -2448,32 +3225,56 @@
 
   function renderCaseList() {
     clear(el.caseList);
+    var groups = { PASSED: 0, FAILED: 0, BLOCKED: 0, READY: 0, OTHER: 0 };
+    state.cases.forEach(function (item) {
+      var group = caseStatusGroup(caseStatus(item));
+      if (groups[group] === undefined) groups.OTHER += 1;
+      else groups[group] += 1;
+    });
+    renderKpis(el.regressionKpis, [
+      { label: "样本", value: state.cases.length, note: "PB-01…51" },
+      { label: "通过", value: groups.PASSED, note: "PASSED", tone: groups.PASSED ? "up" : "" },
+      { label: "失败", value: groups.FAILED, note: "FAILED", tone: groups.FAILED ? "down" : "" },
+      { label: "阻塞", value: groups.BLOCKED, note: "BLOCKED_BY_*", tone: groups.BLOCKED ? "warn" : "" },
+      { label: "就绪", value: groups.READY, note: "READY（未运行）", tone: groups.READY ? "accent" : "" }
+    ]);
+
     var search = state.caseFilter.search.toLowerCase();
     var statusFilter = state.caseFilter.status;
     var shown = state.cases.filter(function (item) {
       var haystack = (item.case_id + " " + item.title + " " + (item.spec_section || "") +
         " " + (item.category || "")).toLowerCase();
       if (search && haystack.indexOf(search) < 0) return false;
-      var status = caseStatus(item);
+      var status = caseStatusGroup(caseStatus(item));
       if (statusFilter && status !== statusFilter) return false;
       return true;
     });
 
     if (!shown.length) {
-      el.caseList.appendChild(makeEl("li", "empty", "没有匹配的样本。"));
+      el.caseList.appendChild(makeEl("li", "empty", "没有匹配的样本；清除筛选后重试。"));
       return;
     }
     shown.forEach(function (item) {
+      var status = caseStatus(item);
       var li = makeEl("li", state.selectedCase === item.case_id ? "active" : "");
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      li.setAttribute("aria-pressed", state.selectedCase === item.case_id ? "true" : "false");
       var row = makeEl("div", "row");
       row.appendChild(makeEl("span", "case-id", item.case_id));
-      row.appendChild(makeEl("span", "status-" + caseStatus(item), caseStatus(item)));
+      row.appendChild(makeEl("span", "status-" + caseStatusGroup(status), status));
       li.appendChild(row);
       li.appendChild(makeEl("div", "case-title", item.title));
       li.appendChild(makeEl("div", "case-cat",
         (item.category || "") + " · 规格 " + (item.spec_section || "") +
         " · " + (item.expected || "")));
       li.addEventListener("click", function () { selectCase(item.case_id); });
+      li.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectCase(item.case_id);
+        }
+      });
       el.caseList.appendChild(li);
     });
   }
@@ -2484,6 +3285,8 @@
     if (!caseItem) return;
     renderCaseList();
     $("case-title").textContent = caseItem.case_id + " · " + caseItem.title;
+    var emptyHint = $("case-empty-hint");
+    if (emptyHint) emptyHint.classList.add("hidden");
 
     clear(el.caseFacts);
     var facts = [
@@ -2669,6 +3472,8 @@
         li.appendChild(makeEl("div", "mono",
           "baseline replay " + shortId(item.baseline_replay_run_id || "—") +
           " · 配置 " + String(item.baseline_config_hash || "—").slice(0, 10)));
+        li.appendChild(makeEl("div", "mono",
+          "time_split_hash " + String(item.time_split_hash || "—").slice(0, 12)));
         li.appendChild(makeEl("div", "mono", "冻结于 " + item.frozen_at));
         el.goldenList.appendChild(li);
       });
@@ -2838,43 +3643,68 @@
 
   function bindTabs() {
     var tabs = document.querySelectorAll(".tab");
-    Array.prototype.forEach.call(tabs, function (tab) {
-      tab.addEventListener("click", function () {
-        Array.prototype.forEach.call(tabs, function (other) {
-          other.classList.remove("active");
-        });
-        tab.classList.add("active");
-        ["annotate", "regression", "dataset"].forEach(function (name) {
-          var view = $("view-" + name);
-          if (view) view.classList.toggle("active", name === tab.dataset.tab);
-        });
-        if (tab.dataset.tab === "annotate") {
-          setTimeout(function () {
-            resizeCharts();
-            if (state.priceChart) state.priceChart.timeScale().fitContent();
-            if (state.atrChart) state.atrChart.timeScale().fitContent();
-          }, 30);
+    function activate(tab) {
+      Array.prototype.forEach.call(tabs, function (other) {
+        var isCurrent = other === tab;
+        other.classList.toggle("active", isCurrent);
+        other.setAttribute("aria-selected", isCurrent ? "true" : "false");
+        other.tabIndex = isCurrent ? 0 : -1;
+      });
+      ["annotate", "regression", "dataset"].forEach(function (name) {
+        var view = $("view-" + name);
+        if (view) view.classList.toggle("active", name === tab.dataset.tab);
+      });
+      if (tab.dataset.tab === "annotate") {
+        setTimeout(function () {
+          resizeCharts();
+          if (state.priceChart) state.priceChart.timeScale().fitContent();
+          if (state.atrChart) state.atrChart.timeScale().fitContent();
+        }, 30);
+      }
+      if (tab.dataset.tab === "regression" && !state.cases.length) loadCases();
+      if (tab.dataset.tab === "dataset") {
+        loadGolden(); loadAudit(); loadSnapshotArtifacts(); loadReplayRuns();
+      }
+    }
+    Array.prototype.forEach.call(tabs, function (tab, index) {
+      tab.addEventListener("click", function () { activate(tab); });
+      tab.addEventListener("keydown", function (event) {
+        var offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          var target = tabs[event.key === "Home" ? 0 : tabs.length - 1];
+          target.focus(); activate(target); return;
         }
-        if (tab.dataset.tab === "regression" && !state.cases.length) loadCases();
-        if (tab.dataset.tab === "dataset") {
-          loadGolden(); loadAudit(); loadSnapshotArtifacts(); loadReplayRuns();
-        }
+        if (!offset) return;
+        event.preventDefault();
+        var next = tabs[(index + offset + tabs.length) % tabs.length];
+        next.focus(); activate(next);
       });
     });
   }
 
   function bindPanelTabs() {
     var tabs = document.querySelectorAll(".panel-tab");
-    Array.prototype.forEach.call(tabs, function (tab) {
-      tab.addEventListener("click", function () {
-        Array.prototype.forEach.call(tabs, function (other) {
-          other.classList.remove("active");
-        });
-        tab.classList.add("active");
-        ["annotate", "structure", "compare"].forEach(function (name) {
-          var view = $("panel-" + name);
-          if (view) view.classList.toggle("active", name === tab.dataset.panel);
-        });
+    function activate(tab) {
+      Array.prototype.forEach.call(tabs, function (other) {
+        var isCurrent = other === tab;
+        other.classList.toggle("active", isCurrent);
+        other.setAttribute("aria-selected", isCurrent ? "true" : "false");
+        other.tabIndex = isCurrent ? 0 : -1;
+      });
+      ["annotate", "structure", "compare"].forEach(function (name) {
+        var view = $("panel-" + name);
+        if (view) view.classList.toggle("active", name === tab.dataset.panel);
+      });
+    }
+    Array.prototype.forEach.call(tabs, function (tab, index) {
+      tab.addEventListener("click", function () { activate(tab); });
+      tab.addEventListener("keydown", function (event) {
+        var offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (!offset) return;
+        event.preventDefault();
+        var next = tabs[(index + offset + tabs.length) % tabs.length];
+        next.focus(); activate(next);
       });
     });
   }
@@ -2885,8 +3715,10 @@
       button.addEventListener("click", function () {
         Array.prototype.forEach.call(tools, function (other) {
           other.classList.remove("active");
+          other.setAttribute("aria-pressed", "false");
         });
         button.classList.add("active");
+        button.setAttribute("aria-pressed", "true");
         state.tool = button.dataset.tool;
         if (el.currentTool) {
           var labels = {
@@ -2946,7 +3778,21 @@
     document.addEventListener("keydown", function (event) {
       var tag = (event.target && event.target.tagName) || "";
       if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if ((event.ctrlKey || event.metaKey) && (event.key === "z" || event.key === "Z")) {
+        event.preventDefault();
+        applyAnnotationHistory(event.shiftKey ? "redo" : "undo");
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && (event.key === "y" || event.key === "Y")) {
+        event.preventDefault();
+        applyAnnotationHistory("redo");
+        return;
+      }
       if (event.key === "r" || event.key === "R") resetViewport();
+      if (event.key === "?" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        openHelp();
+      }
     });
     el.clearAnchors.addEventListener("click", function () {
       state.pendingClicks = [];
@@ -2977,6 +3823,38 @@
     el.refreshAnnotations.addEventListener("click", function () {
       loadAnnotations(); loadAudit();
     });
+    if (el.annotationSearch) {
+      el.annotationSearch.addEventListener("input", function (event) {
+        state.annotationFilter.search = event.target.value;
+        renderAnnotations();
+        if (annotationFilterTimer) clearTimeout(annotationFilterTimer);
+        annotationFilterTimer = setTimeout(loadAnnotations, 250);
+      });
+    }
+    [el.annotationTimeFrom, el.annotationTimeTo].forEach(function (input) {
+      if (!input) return;
+      input.addEventListener("change", function () {
+        state.annotationFilter.timeFrom = el.annotationTimeFrom.value || "";
+        state.annotationFilter.timeTo = el.annotationTimeTo.value || "";
+        loadAnnotations();
+      });
+    });
+    if (el.clearAnnotationFilters) {
+      el.clearAnnotationFilters.addEventListener("click", function () {
+        state.annotationFilter = { search: "", timeFrom: "", timeTo: "" };
+        if (el.annotationSearch) el.annotationSearch.value = "";
+        if (el.annotationTimeFrom) el.annotationTimeFrom.value = "";
+        if (el.annotationTimeTo) el.annotationTimeTo.value = "";
+        loadAnnotations();
+      });
+    }
+    if (el.annotationUndo) el.annotationUndo.addEventListener("click", function () {
+      applyAnnotationHistory("undo");
+    });
+    if (el.annotationRedo) el.annotationRedo.addEventListener("click", function () {
+      applyAnnotationHistory("redo");
+    });
+    if (el.autoSplitGolden) el.autoSplitGolden.addEventListener("click", autoSplitGolden);
     el.freezeGolden.addEventListener("click", freezeGolden);
     el.freezeGolden2.addEventListener("click", freezeGolden);
     el.compareSwings.addEventListener("click", function () { runComparison("swings"); });
@@ -3008,6 +3886,34 @@
     el.buildSnapshot.addEventListener("click", buildSnapshot);
   }
 
+  function openHelp() {
+    if (!el.helpDialog) return;
+    if (typeof el.helpDialog.showModal === "function") {
+      if (!el.helpDialog.open) el.helpDialog.showModal();
+    } else {
+      el.helpDialog.removeAttribute("hidden");
+    }
+  }
+
+  function closeHelp() {
+    if (!el.helpDialog) return;
+    if (typeof el.helpDialog.close === "function" && el.helpDialog.open) {
+      el.helpDialog.close();
+    }
+  }
+
+  function bindHelp() {
+    if (el.helpToggle) {
+      el.helpToggle.addEventListener("click", openHelp);
+    }
+    if (!el.helpDialog) return;
+    el.helpDialog.addEventListener("click", function (event) {
+      if (event.target === el.helpDialog) closeHelp();
+    });
+    var close = el.helpDialog.querySelector("[data-close]");
+    if (close) close.addEventListener("click", closeHelp);
+  }
+
   function bindResizeOnce() {
     if (typeof ResizeObserver === "undefined") return;
     var observer = new ResizeObserver(function () {
@@ -3025,6 +3931,17 @@
       timeframeButtons: $("timeframe-buttons"),
       stateRows: $("state-rows"),
       levels: $("levels"),
+      chartTf: $("chart-tf"),
+      chartState: $("chart-state"),
+      chartMeta: $("chart-meta"),
+      structureTf: $("structure-tf"),
+      projectBreakdown: $("project-breakdown"),
+      projectProgress: $("project-progress"),
+      annotationListCount: $("annotation-list-count"),
+      regressionKpis: $("regression-kpis"),
+      datasetKpis: $("dataset-kpis"),
+      helpToggle: $("help-toggle"),
+      helpDialog: $("help-dialog"),
       zoneList: $("zone-list"),
       structureList: $("structure-list"),
       annotationList: $("annotation-list"),
@@ -3061,6 +3978,14 @@
       compareZones: $("compare-zones"),
       annotationStatus: $("annotation-status"),
       annotationSummary: $("annotation-summary"),
+      annotationSearch: $("annotation-search"),
+      annotationTimeFrom: $("annotation-time-from"),
+      annotationTimeTo: $("annotation-time-to"),
+      clearAnnotationFilters: $("clear-annotation-filters"),
+      annotationUndo: $("annotation-undo"),
+      annotationRedo: $("annotation-redo"),
+      autoSplitGolden: $("auto-split-golden"),
+      splitStatus: $("split-status"),
       auditList: $("audit-list"),
       goldenList: $("golden-list"),
       goldenSplit: $("golden-split"),
@@ -3128,6 +4053,8 @@
     bindPanelTabs();
     bindTools();
     bindControls();
+    bindHelp();
+    updateUndoButtons();
     bindResizeOnce();
     bindLiveToggle();
 

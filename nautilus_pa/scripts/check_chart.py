@@ -25,10 +25,28 @@ import argparse
 import contextlib
 import json
 import sys
+import time
 from pathlib import Path
 
 DEFAULT_URL = "http://127.0.0.1:8787/"
 DEFAULT_OUTPUT = Path("chart-check.png")
+
+
+def wait_for_text(
+    page: object,
+    selector: str,
+    needles: tuple[str, ...],
+    timeout_seconds: float,
+) -> bool:
+    """轮询元素文本（不依赖 page.evaluate 字符串求值，CSP 下也可用）。"""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        with contextlib.suppress(Exception):
+            text = page.text_content(selector) or ""
+            if any(needle in text for needle in needles):
+                return True
+        page.wait_for_timeout(150)
+    return False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,14 +106,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         page.goto(args.url, wait_until="load")
-        try:
-            page.wait_for_function(
-                "document.getElementById('status-line')"
-                " .textContent.includes('·')",
-                timeout=args.timeout * 1000,
-            )
-        except Exception as exc:
-            errors.append(f"等待数据超时: {exc}")
+        if not wait_for_text(page, "#status-line", ("·",), args.timeout):
+            errors.append("等待数据超时")
         page.wait_for_timeout(1800)
 
         report["annotate"] = page.evaluate(
@@ -145,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
         # 逐周期切换，确认图表与面板都能重绘
         timeframe_checks = []
         for code in ("1M", "1W", "1D", "4H", "1H", "15M", "3M"):
-            page.click(f'#timeframe-buttons button:has-text("({code})")')
+            page.click(f'#timeframe-buttons button[data-timeframe="{code}"]')
             page.wait_for_timeout(320)
             timeframe_checks.append(
                 page.evaluate(
@@ -252,15 +264,8 @@ def main(argv: list[str] | None = None) -> int:
         page.wait_for_timeout(600)
         if not args.skip_regression:
             page.click("#run-suite")
-            try:
-                page.wait_for_function(
-                    "document.getElementById('suite-meta')"
-                    ".textContent.includes('run ')"
-                    " || document.getElementById('suite-meta').textContent.includes('失败')",
-                    timeout=args.timeout * 1000,
-                )
-            except Exception as exc:
-                errors.append(f"回归运行超时: {exc}")
+            if not wait_for_text(page, "#suite-meta", ("run ", "失败"), args.timeout):
+                errors.append("回归运行超时")
             page.wait_for_timeout(500)
 
         report["regression"] = page.evaluate(

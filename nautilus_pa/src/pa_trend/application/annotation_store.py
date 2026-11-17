@@ -21,6 +21,7 @@ import json
 import sqlite3
 import threading
 import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,7 @@ from pa_trend.domain.errors import PaTrendError
 #: 可序列化的 JSON 值类型；避免在公开签名里使用 ``Any``。
 JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: 允许的实体类型（SACW 4.1、4.4）。
 ENTITY_TYPES = (
@@ -86,6 +87,106 @@ ZONE_ANNOTATION_MODES = (
     "ANCHOR_ONLY_WITH_OVERRIDE",
 )
 
+#: 标注载荷里可作为“对象时间”的字段，按优先级排列（SACW 4.4）。
+_ANNOTATION_TIME_FIELDS = ("occurred_at", "valid_from", "created_at", "updated_at")
+#: 标注对象的结束时间字段；缺失时退化为对象时间。
+_ANNOTATION_END_TIME_FIELDS = ("confirmed_at", "valid_to")
+
+
+def compute_time_split_hash(splits: list[dict[str, Any]]) -> str:
+    """对数据集切分区间生成确定性哈希（SACW 6.3 time_split_hash）。"""
+    canonical = [
+        {
+            "split": str(item["split"]),
+            "range_start": str(item["range_start"]),
+            "range_end": str(item["range_end"]),
+        }
+        for item in sorted(
+            splits,
+            key=lambda item: (str(item["range_start"]), str(item["range_end"]), str(item["split"])),
+        )
+    ]
+    return hashlib.sha256(_json(canonical).encode("utf-8")).hexdigest()
+
+
+def compute_default_time_split_hash(range_start: str, range_end: str) -> str | None:
+    """按 60/20/20 时间三分生成默认 time_split_hash（SACW 5.3、6.3）。
+
+    冻结时尚未登记显式切分，用数据集时间范围固化一份默认三分计划；
+    之后调用 split 的自动三分若使用同一范围，会得到同一哈希。
+    """
+    start = _parse_iso_datetime(range_start)
+    end = _parse_iso_datetime(range_end)
+    if start is None or end is None or end <= start:
+        return None
+    span_us = int((end - start) / timedelta(microseconds=1))
+    calibration_end = start + timedelta(microseconds=span_us * 6 // 10)
+    validation_end = start + timedelta(microseconds=span_us * 8 // 10)
+    windows = (
+        ("CALIBRATION", start, calibration_end),
+        ("VALIDATION", calibration_end, validation_end),
+        ("HOLDOUT", validation_end, end),
+    )
+    return compute_time_split_hash(
+        [
+            {
+                "split": name,
+                "range_start": window_start.isoformat().replace("+00:00", "Z"),
+                "range_end": window_end.isoformat().replace("+00:00", "Z"),
+            }
+            for name, window_start, window_end in windows
+        ]
+    )
+
+
+def _annotation_time_value(annotation: dict[str, Any]) -> str | None:
+    """返回标注对象用于时间过滤与切分的起始时间。"""
+    payload = annotation.get("payload") or {}
+    if not isinstance(payload, dict):
+        return None
+    for field in _ANNOTATION_TIME_FIELDS:
+        value = payload.get(field)
+        if value:
+            return str(value)
+    created = annotation.get("created_at")
+    return str(created) if created else None
+
+
+def _annotation_end_time_value(annotation: dict[str, Any]) -> str | None:
+    """返回标注对象用于时间过滤与切分的结束时间。"""
+    payload = annotation.get("payload") or {}
+    if isinstance(payload, dict):
+        for field in _ANNOTATION_END_TIME_FIELDS:
+            value = payload.get(field)
+            if value:
+                return str(value)
+    return _annotation_time_value(annotation)
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    """把 ISO-8601 文本解析为 UTC 时间；失败返回 None。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _parse_time_bound(value: object, *, end: bool) -> datetime | None:
+    """解析时间范围端点；只有日期时，起点取当日 0 点、终点取当日 24 点。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if len(text) == 10:
+        text = text + ("T23:59:59.999999" if end else "T00:00:00")
+    return _parse_iso_datetime(text)
+
+
 _SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -113,6 +214,7 @@ CREATE TABLE IF NOT EXISTS dataset_splits (
     range_end TEXT NOT NULL,
     data_hash TEXT NOT NULL,
     annotation_hash TEXT,
+    time_split_hash TEXT,
     frozen_at TEXT NOT NULL,
     UNIQUE(dataset_id, split)
 );
@@ -177,6 +279,7 @@ CREATE TABLE IF NOT EXISTS golden_datasets (
     frozen_at TEXT NOT NULL,
     data_hash TEXT NOT NULL,
     annotation_hash TEXT NOT NULL,
+    time_split_hash TEXT,
     baseline_replay_run_id TEXT,
     baseline_code_commit TEXT,
     baseline_config_hash TEXT,
@@ -469,6 +572,23 @@ def validate_annotation_payload(
             "confirmation_evidence",
             {"policy": policy, "source": "SACW_WORKBENCH"},
         )
+        # SACW 3.4A / 6.2：手动改价必须保留覆盖标记与修改原因，审核时可见。
+        override_raw = data.get("manual_price_override")
+        override = override_raw is True or str(override_raw or "").lower() in {
+            "true",
+            "1",
+            "yes",
+        }
+        if override:
+            override_reason = str(data.get("override_reason") or "").strip()
+            _require(
+                bool(override_reason),
+                "SWING_POINT manual_price_override requires override_reason",
+            )
+            data["manual_price_override"] = True
+            data["override_reason"] = override_reason
+        else:
+            data["manual_price_override"] = False
         data["price"] = str(data["price"])
 
     elif entity_type == "N_STRUCTURE":
@@ -560,7 +680,12 @@ def validate_annotation_payload(
                 data[key] = str(data[key])
 
     elif entity_type == "PROTECTED_POINT":
-        _require_fields(data, ("direction", "price", "valid_from"), entity_type)
+        # SACW 3.4D：保护点必须能追溯到来源 SwingPoint。
+        _require_fields(
+            data,
+            ("direction", "price", "valid_from", "source_swing_id"),
+            entity_type,
+        )
         _require(
             str(data["direction"]).upper() in {"HIGH", "LOW"},
             "PROTECTED_POINT direction must be HIGH or LOW",
@@ -580,6 +705,7 @@ def validate_annotation_payload(
         data["direction"] = str(data["direction"]).upper()
         data["event_type"] = event_type
         data["price"] = str(data["price"])
+        data["source_swing_id"] = str(data["source_swing_id"])
 
     elif entity_type == "STATE_INTERVAL":
         _require_fields(
@@ -629,6 +755,8 @@ class SacwStore:
                 "stage": "TEXT",
                 "blocked_reason": "TEXT",
             },
+            "dataset_splits": {"time_split_hash": "TEXT"},
+            "golden_datasets": {"time_split_hash": "TEXT"},
         }
         for table, columns in additions.items():
             existing = {
@@ -742,17 +870,34 @@ class SacwStore:
         data_hash: str,
         annotation_hash: str | None = None,
     ) -> dict[str, Any]:
-        """保存 Calibration / Validation / Holdout 切分（SACW 5.3）。"""
+        """保存 Calibration / Validation / Holdout 切分（SACW 5.3）。
+
+        同一切分区间会参与数据集级 time_split_hash；该哈希在每次登记后
+        重新计算并回写到该数据集的全部切分记录，保证切分边界与黄金样本
+        绑定的哈希一致。
+        """
         _require(split in {"CALIBRATION", "VALIDATION", "HOLDOUT"}, f"unknown split: {split}")
         split_id = f"{dataset_id}:{split}"
         with self._lock, self._conn:
+            existing = [
+                _row_to_dict(row)
+                for row in self._conn.execute(
+                    "SELECT * FROM dataset_splits WHERE dataset_id = ?",
+                    (dataset_id,),
+                ).fetchall()
+            ]
+            candidate = [
+                item for item in existing if str(item["split"]) != split
+            ] + [{"split": split, "range_start": range_start, "range_end": range_end}]
+            time_split_hash = compute_time_split_hash(candidate)
             self._conn.execute(
                 "INSERT INTO dataset_splits"
                 "(split_id, dataset_id, split, range_start, range_end, data_hash,"
-                " annotation_hash, frozen_at) VALUES(?,?,?,?,?,?,?,?) "
+                " annotation_hash, time_split_hash, frozen_at) VALUES(?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(split_id) DO UPDATE SET"
                 " range_start=excluded.range_start, range_end=excluded.range_end,"
                 " data_hash=excluded.data_hash, annotation_hash=excluded.annotation_hash,"
+                " time_split_hash=excluded.time_split_hash,"
                 " frozen_at=excluded.frozen_at",
                 (
                     split_id,
@@ -762,8 +907,14 @@ class SacwStore:
                     range_end,
                     data_hash,
                     annotation_hash,
+                    time_split_hash,
                     now_iso(),
                 ),
+            )
+            # 数据集级哈希必须对全部切分一致，避免只登记一个切分就冻结的歧义。
+            self._conn.execute(
+                "UPDATE dataset_splits SET time_split_hash = ? WHERE dataset_id = ?",
+                (time_split_hash, dataset_id),
             )
         return {
             "split_id": split_id,
@@ -773,6 +924,7 @@ class SacwStore:
             "range_end": range_end,
             "data_hash": data_hash,
             "annotation_hash": annotation_hash,
+            "time_split_hash": time_split_hash,
         }
 
     def list_dataset_splits(self, dataset_id: str) -> list[dict[str, Any]]:
@@ -943,9 +1095,16 @@ class SacwStore:
         entity_type: str | None = None,
         timeframe: str | None = None,
         status: str | None = None,
+        time_from: str | None = None,
+        time_to: str | None = None,
+        search: str | None = None,
         include_deleted: bool = False,
     ) -> list[dict[str, Any]]:
-        """列出项目下的标注。"""
+        """列出项目下的标注，支持周期/类型/状态/时间区间与关键字过滤。
+
+        时间区间按标注对象的 occurred_at / valid_from 过滤；关键字在实体
+        类型、ID、状态、标签来源与完整载荷 JSON 上做不区分大小写的匹配。
+        """
         sql = "SELECT * FROM annotations WHERE project_id = ?"
         params: list[Any] = [project_id]
         if entity_type is not None:
@@ -962,7 +1121,39 @@ class SacwStore:
         sql += " ORDER BY created_at, annotation_id"
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        return [self._annotation_view(row) for row in rows]
+        result = [self._annotation_view(row) for row in rows]
+        start = _parse_time_bound(time_from, end=False)
+        end = _parse_time_bound(time_to, end=True)
+        if start is not None or end is not None:
+            filtered: list[dict[str, Any]] = []
+            for item in result:
+                value = _parse_iso_datetime(_annotation_time_value(item))
+                if value is None:
+                    continue
+                if start is not None and value < start:
+                    continue
+                if end is not None and value > end:
+                    continue
+                filtered.append(item)
+            result = filtered
+        keyword = str(search or "").strip().lower()
+        if keyword:
+            result = [
+                item
+                for item in result
+                if keyword
+                in " ".join(
+                    [
+                        str(item["annotation_id"]),
+                        str(item["entity_type"]),
+                        str(item["timeframe"]),
+                        str(item["status"]),
+                        str(item["label_source"]),
+                        _json(item["payload"]),
+                    ],
+                ).lower()
+            ]
+        return result
 
     def revise_annotation(
         self,
@@ -1021,6 +1212,49 @@ class SacwStore:
                 reason=reason,
             )
         return self.get_annotation(annotation_id)  # type: ignore[return-value]
+
+    def copy_annotation(
+        self,
+        *,
+        annotation_id: str,
+        actor: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """复制标注为新 DRAFT（SACW 3.6：修订不覆盖旧版本）。
+
+        复制保留实体类型、周期、载荷与人工来源，但不复制状态与修订号；
+        冻结标注可以复制，复制出的对象仍需重新走提交/审核流程。
+        """
+        source = self.get_annotation(annotation_id)
+        if source is None:
+            raise StoreError(f"annotation not found: {annotation_id}")
+        if source["deleted_at"] is not None:
+            raise StoreError(f"annotation {annotation_id} is deleted")
+        copied = self.create_annotation(
+            project_id=source["project_id"],
+            entity_type=source["entity_type"],
+            timeframe=source["timeframe"],
+            payload=dict(source["payload"]),
+            instrument_id=source["instrument_id"],
+            actor=actor,
+            label_source=source["label_source"],
+            status="DRAFT",
+            annotation_rule_version=source["annotation_rule_version"],
+            dataset_id=source.get("dataset_id"),
+            config_hash=source.get("config_hash"),
+            reason=reason or f"copied from {annotation_id}",
+        )
+        with self._lock, self._conn:
+            self._audit(
+                actor=actor,
+                action="ANNOTATION_COPIED",
+                entity_type=source["entity_type"],
+                entity_id=copied["annotation_id"],
+                before={"source_annotation_id": annotation_id},
+                after={"annotation_id": copied["annotation_id"]},
+                reason=reason or f"copied from {annotation_id}",
+            )
+        return copied
 
     def transition_annotation(
         self,
@@ -1116,6 +1350,20 @@ class SacwStore:
 
     # --------------------------------------------------------------- 黄金样本
 
+    def project_time_bounds(
+        self,
+        project_id: str,
+        *,
+        statuses: frozenset[str] = GROUND_TRUTH_STATUSES,
+    ) -> tuple[str | None, str | None]:
+        """返回项目正式标注的最早/最晚对象时间，用于自动切分（SACW 5.3）。"""
+        rows = [row for row in self.list_annotations(project_id) if row["status"] in statuses]
+        starts = sorted(value for value in (_annotation_time_value(row) for row in rows) if value)
+        ends = sorted(value for value in (_annotation_end_time_value(row) for row in rows) if value)
+        if not starts or not ends:
+            return (None, None)
+        return (starts[0], ends[-1])
+
     def annotation_hash(
         self,
         project_id: str,
@@ -1165,6 +1413,49 @@ class SacwStore:
                     f"{row['label_source']} which cannot enter Ground Truth",
                 )
         annotation_hash = self.annotation_hash(project_id)
+        # SACW 6.3：冻结时固化时间切分哈希。已登记切分优先；否则用数据集
+        # 时间范围固化一份 60/20/20 默认三分哈希，供后续实验复现。
+        splits = self.list_dataset_splits(dataset_id) if dataset_id else []
+        if splits:
+            time_split_hash: str | None = compute_time_split_hash(splits)
+        else:
+            time_range: dict[str, str] | None = None
+            market = self.get_market_dataset(dataset_id) if dataset_id else None
+            if market is not None:
+                market_start = str(market["range_start"])
+                market_end = str(market["range_end"])
+                if market_start.isdigit() and market_end.isdigit():
+                    from pa_trend.domain.models.timeframe import ns_to_dt
+
+                    time_range = {
+                        "range_start": ns_to_dt(int(market_start))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                        "range_end": ns_to_dt(int(market_end))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    }
+            if time_range is None:
+                starts = sorted(
+                    value for value in (_annotation_time_value(row) for row in usable) if value
+                )
+                ends = sorted(
+                    value for value in (_annotation_end_time_value(row) for row in usable) if value
+                )
+                if starts and ends:
+                    time_range = {"range_start": starts[0], "range_end": ends[-1]}
+            time_split_hash = None
+            if time_range is not None:
+                time_split_hash = compute_default_time_split_hash(
+                    time_range["range_start"],
+                    time_range["range_end"],
+                )
+                if time_split_hash is None:
+                    # 单点标注的起止时间相同，无法三分；仍固化一份单窗口哈希，
+                    # 保证黄金样本具备可追溯的 time_split_hash。
+                    time_split_hash = compute_time_split_hash(
+                        [dict(time_range, split=split)]
+                    )
         golden_id = new_id("gold")
         # 冻结即建立 baseline replay 绑定（SACW 19.4、6.3）：后续差异比较
         # 必须引用同一条回放，而不是临时用当前上下文“复核”标注。
@@ -1181,9 +1472,9 @@ class SacwStore:
             self._conn.execute(
                 "INSERT INTO golden_datasets"
                 "(golden_dataset_id, project_id, dataset_id, split, frozen_at, data_hash,"
-                " annotation_hash, baseline_replay_run_id, baseline_code_commit,"
+                " annotation_hash, time_split_hash, baseline_replay_run_id, baseline_code_commit,"
                 " baseline_config_hash, annotation_count, status) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     golden_id,
                     project_id,
@@ -1192,6 +1483,7 @@ class SacwStore:
                     now_iso(),
                     data_hash,
                     annotation_hash,
+                    time_split_hash,
                     baseline_replay_run_id,
                     baseline_code_commit,
                     baseline_config_hash,
@@ -1209,6 +1501,7 @@ class SacwStore:
                     "split": split,
                     "data_hash": data_hash,
                     "annotation_hash": annotation_hash,
+                    "time_split_hash": time_split_hash,
                     "annotation_count": len(usable),
                     "baseline_replay_run_id": baseline_replay_run_id,
                 },

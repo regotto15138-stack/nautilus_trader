@@ -41,6 +41,7 @@ from pa_trend.application.annotation_store import (
 )
 from pa_trend.application.data_service import DataService
 from pa_trend.application.market_context import MarketContext
+from pa_trend.application.market_sync import MarketSyncService
 from pa_trend.application.matching import (
     MatcherConfig,
     SwingCandidate,
@@ -130,12 +131,17 @@ class ApiRouter:
         store: SacwStore,
         regression: RegressionRunner,
         configs_dir: Path | None = None,
+        sync: MarketSyncService | None = None,
     ) -> None:
-        """初始化路由表。"""
+        """初始化路由表。
+
+        ``sync`` 为 ``None`` 时不提供按需补齐接口（合成数据或测试场景）。
+        """
         self.service = service
         self.store = store
         self.regression = regression
         self.configs_dir = configs_dir
+        self.sync = sync
         self._routes: list[Route] = []
         self._register()
 
@@ -150,6 +156,8 @@ class ApiRouter:
         add("GET", r"/api/v1/meta", self.meta)
         add("GET", r"/api/v1/market/snapshot", self.snapshot_payload)
         add("GET", r"/api/v1/market/live", self.market_live)
+        add("GET", r"/api/v1/market/freshness", self.market_freshness)
+        add("POST", r"/api/v1/market/sync", self.market_sync)
         add("GET", r"/api/v1/market/bars", self.market_bars)
         add("GET", r"/api/v1/market/datasets", self.market_datasets)
         add("GET", r"/api/v1/market/coverage", self.market_coverage)
@@ -218,6 +226,11 @@ class ApiRouter:
             "GET",
             r"/api/v1/annotations/(?P<annotation_id>[\w\-]+)/revisions",
             self.list_revisions,
+        )
+        add(
+            "POST",
+            r"/api/v1/annotations/(?P<annotation_id>[\w\-]+)/copy",
+            self.copy_annotation,
         )
         add("GET", r"/api/v1/audit-logs", self.audit_logs)
 
@@ -380,6 +393,10 @@ class ApiRouter:
           前端只追加这些增量；
         - 增量超过 :data:`~pa_trend.application.data_service.MAX_LIVE_BARS` 根
           时下发 ``reload``，前端改为整页重载，避免在前端拼接过长历史。
+
+        ``stale`` 为真表示目录里的最新 K 线落后于当前 UTC——要么采集器没在跑，
+        要么停机期间的缺口还没补。``changed`` 只说明「本地有新数据」，两者必须
+        分开看：采集器停了的时候 ``changed`` 会一直是假，前端不能据此认为数据是新的。
         """
         status = self.service.refresh()
         since_ns = _parse_since(query)
@@ -412,6 +429,7 @@ class ApiRouter:
             timeframes.append(payload)
 
         dataset = self.service.dataset_info()
+        freshness = self.sync.freshness() if self.sync is not None else None
         return {
             "changed": status["changed"],
             "addedBars": status["addedBars"],
@@ -427,8 +445,47 @@ class ApiRouter:
             "generatedAt": _iso_now(),
             "datasetId": dataset.dataset_id,
             "dataHash": dataset.data_hash,
+            "syncing": self.sync.busy if self.sync is not None else False,
+            "stale": bool(freshness and freshness["stale"]),
+            "freshness": freshness,
             "timeframes": timeframes,
         }
+
+    def market_freshness(self, **_: object) -> JSON:
+        """返回各周期相对当前 UTC 的新鲜度（只读，不触网）。"""
+        if self.sync is None:
+            raise ApiError(
+                "SYNC_UNAVAILABLE",
+                "当前数据集不支持新鲜度审计（合成数据）",
+                HTTPStatus.NOT_IMPLEMENTED,
+            )
+        return self.sync.freshness()
+
+    def market_sync(self, **_: object) -> JSON:
+        """按需补齐数据：审计 → 跑一次采集器 → 复核。
+
+        补齐本身交给采集器子进程完成，工作台不直接访问交易所。补齐成功后
+        调用方应再请求 ``/market/snapshot`` 或 ``/market/live`` 拿到重建后的
+        视图——K 线与全部指标都依赖同一份历史回放，必须整体刷新。
+        """
+        if self.sync is None:
+            raise ApiError(
+                "SYNC_UNAVAILABLE",
+                "当前数据集不支持按需补齐（合成数据）",
+                HTTPStatus.NOT_IMPLEMENTED,
+            )
+        result = self.sync.sync()
+        if result.status == "busy":
+            raise ApiError(
+                "SYNC_BUSY",
+                result.message,
+                HTTPStatus.CONFLICT,
+            )
+        # 数据目录可能已经变了，交给调用方重新拉取整页快照。
+        self.service.invalidate()
+        payload = result.as_dict()
+        payload["freshness"] = self.sync.freshness()
+        return payload
 
     def market_bars(self, *, query: dict[str, list[str]], **_: object) -> JSON:
         """按周期与时间范围查询 K 线（SACW 6.1）。"""
@@ -560,6 +617,9 @@ class ApiRouter:
             entity_type=_first(query, "entity_type"),
             timeframe=_first(query, "timeframe"),
             status=_first(query, "status"),
+            time_from=_first(query, "time_from") or _first(query, "from"),
+            time_to=_first(query, "time_to") or _first(query, "to"),
+            search=_first(query, "search") or _first(query, "q"),
         )
         return {"annotations": rows, "count": len(rows)}
 
@@ -701,24 +761,28 @@ class ApiRouter:
                     f"{existing['timeframe']} state is not valid for STATE_INTERVAL",
                 )
             payload["state"] = state
-        expected_revision = body.get("expected_revision")
-        if expected_revision is not None:
-            try:
-                expected = int(expected_revision)
-            except (TypeError, ValueError) as exc:
-                raise ApiError("INVALID_REVISION", "expected_revision must be an integer") from exc
-            if int(existing["revision"]) != expected:
-                raise ApiError(
-                    "REVISION_CONFLICT",
-                    f"expected revision {expected}, current {existing['revision']}",
-                    HTTPStatus.CONFLICT,
-                )
+        # SACW 6.2：PATCH 必须携带 expected_revision，缺失时不得按无锁放行。
+        if body.get("expected_revision") is None:
+            raise ApiError(
+                "EXPECTED_REVISION_REQUIRED",
+                "PATCH requires expected_revision (optimistic lock)",
+            )
+        try:
+            expected = int(body["expected_revision"])
+        except (TypeError, ValueError) as exc:
+            raise ApiError("INVALID_REVISION", "expected_revision must be an integer") from exc
+        if int(existing["revision"]) != expected:
+            raise ApiError(
+                "REVISION_CONFLICT",
+                f"expected revision {expected}, current {existing['revision']}",
+                HTTPStatus.CONFLICT,
+            )
         return self.store.revise_annotation(
             annotation_id=params["annotation_id"],
             payload=payload,
             actor=str(body.get("actor") or "web"),
             reason=str(body.get("reason") or "revised from web workbench"),
-            expected_revision=None if expected_revision is None else expected,
+            expected_revision=expected,
         )
 
     def delete_annotation(self, *, body: JSON, params: JSON, **_: object) -> JSON:
@@ -760,6 +824,14 @@ class ApiRouter:
     def list_revisions(self, *, params: JSON, **_: object) -> JSON:
         """列出标注修订历史。"""
         return {"revisions": self.store.list_revisions(params["annotation_id"])}
+
+    def copy_annotation(self, *, body: JSON, params: JSON, **_: object) -> JSON:
+        """复制标注为新的 DRAFT（SACW 3.6）。"""
+        return self.store.copy_annotation(
+            annotation_id=params["annotation_id"],
+            actor=str(body.get("actor") or "web"),
+            reason=body.get("reason"),
+        )
 
     def ground_truth_hash(self, *, params: JSON, **_: object) -> JSON:
         """返回项目正式 Ground Truth 的标注哈希。"""
@@ -1332,6 +1404,8 @@ class ApiRouter:
             issues.append("golden dataset is not bound to a baseline replay run")
         if not golden.get("baseline_config_hash"):
             issues.append("golden dataset has no baseline config hash")
+        if not golden.get("time_split_hash"):
+            issues.append("golden dataset has no time_split_hash")
         return {
             "valid": not issues,
             "issues": issues,
@@ -1339,19 +1413,26 @@ class ApiRouter:
             "annotationCount": len(annotation_ids),
             "annotationHash": golden["annotation_hash"],
             "dataHash": golden["data_hash"],
+            "timeSplitHash": golden.get("time_split_hash"),
             "baselineReplayRunId": golden.get("baseline_replay_run_id"),
         }
 
     def split_golden(self, *, body: JSON, params: JSON, **_: object) -> JSON:
         """登记黄金样本的数据切分（SACW 5.3）。
 
-        采集数据没有可自动推断的训练/验证边界，因此区间必须由调用方显式传入，
-        服务端只做一致性与哈希绑定，不擅自切分。
+        显式传入 range_start / range_end 时只登记该区间；省略区间或传
+        auto=true 时，按数据集时间范围做 60% / 20% / 20% 的时间三分，
+        生成 CALIBRATION / VALIDATION / HOLDOUT，不随机打散相邻 Bar。
         """
         golden = self.get_golden(params=params)
-        split = str(body.get("split") or golden["split"]).upper()
+        dataset_id = str(body.get("dataset_id") or golden.get("dataset_id") or "")
+        if not dataset_id:
+            raise ApiError("MISSING_DATASET", "golden dataset has no dataset_id")
         range_start = str(body.get("range_start") or "")
         range_end = str(body.get("range_end") or "")
+        auto = bool(body.get("auto")) or (not range_start and not range_end)
+        if auto:
+            return self._auto_split_golden(golden, dataset_id=dataset_id)
         if not range_start or not range_end:
             raise ApiError(
                 "MISSING_RANGE",
@@ -1359,9 +1440,7 @@ class ApiRouter:
             )
         if range_end <= range_start:
             raise ApiError("INVALID_RANGE", "range_end must be after range_start")
-        dataset_id = str(body.get("dataset_id") or golden.get("dataset_id") or "")
-        if not dataset_id:
-            raise ApiError("MISSING_DATASET", "golden dataset has no dataset_id")
+        split = str(body.get("split") or golden["split"]).upper()
         return self.store.save_dataset_split(
             dataset_id=dataset_id,
             split=split,
@@ -1370,6 +1449,60 @@ class ApiRouter:
             data_hash=str(golden["data_hash"]),
             annotation_hash=str(golden["annotation_hash"]),
         )
+
+    def _auto_split_golden(self, golden: JSON, *, dataset_id: str) -> JSON:
+        """按数据集时间范围自动生成 60/20/20 三分切分。"""
+        dataset = self.service.dataset_info()
+        start_ns: int | None = None
+        end_ns: int | None = None
+        market = self.store.get_market_dataset(dataset_id)
+        if market is not None:
+            market_start = str(market["range_start"])
+            market_end = str(market["range_end"])
+            if market_start.isdigit() and market_end.isdigit():
+                start_ns = int(market_start)
+                end_ns = int(market_end)
+        if start_ns is None or end_ns is None:
+            bounds = self.store.project_time_bounds(str(golden["project_id"]))
+            if bounds[0] is not None and bounds[1] is not None:
+                start_ns = _iso_to_ns(str(bounds[0]))
+                end_ns = _iso_to_ns(str(bounds[1]))
+        if start_ns is None or end_ns is None:
+            start_ns = dataset.range_start_ns
+            end_ns = dataset.range_end_ns
+        if start_ns is None or end_ns is None:
+            raise ApiError(
+                "MISSING_RANGE",
+                "cannot derive dataset time range for automatic split",
+            )
+        if end_ns <= start_ns:
+            raise ApiError("INVALID_RANGE", "dataset time range must not be empty")
+        span = end_ns - start_ns
+        calibration_end = start_ns + span * 6 // 10
+        validation_end = start_ns + span * 8 // 10
+        windows = (
+            ("CALIBRATION", start_ns, calibration_end),
+            ("VALIDATION", calibration_end, validation_end),
+            ("HOLDOUT", validation_end, end_ns),
+        )
+        for name, window_start, window_end in windows:
+            self.store.save_dataset_split(
+                dataset_id=dataset_id,
+                split=name,
+                range_start=_ns_to_iso(window_start),
+                range_end=_ns_to_iso(window_end),
+                data_hash=str(golden["data_hash"]),
+                annotation_hash=str(golden["annotation_hash"]),
+            )
+        # save_dataset_split 会把数据集级哈希回写到全部切分，这里重新读取，
+        # 保证返回的三条记录携带同一个最终哈希。
+        stored = {item["split"]: item for item in self.store.list_dataset_splits(dataset_id)}
+        splits = [stored[name] for name, _, _ in windows]
+        return {
+            "dataset_id": dataset_id,
+            "time_split_hash": splits[0]["time_split_hash"],
+            "splits": splits,
+        }
 
     def list_dataset_splits(self, *, params: JSON, **_: object) -> JSON:
         """列出数据集切分。"""

@@ -3,92 +3,103 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
 <title>SACW V1.1.2 · 结构标注与参数校准工作台</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230e1117'/%3E%3Cpath d='M2 11l3-4 3 2 3-5 3 3' stroke='%23ffb74d' fill='none' stroke-width='1.6'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b1018'/%3E%3Cpath d='M2 11l3-4 3 2 3-5 3 3' stroke='%234da3ff' fill='none' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+<a class="skip-link" href="#chart-region">跳到图表</a>
 
 <header class="topbar">
   <div class="brand">
-    <span class="dot"></span>
-    <h1>SACW 结构标注工作台</h1>
-    <span id="sacw-version" class="badge">V1.1.2</span>
-    <span id="spec-version" class="badge dim">V1.4.8</span>
-    <span id="instrument" class="instrument">—</span>
-    <span id="source-badge" class="badge dim">—</span>
-    <span id="dataset-badge" class="badge dim mono" title="数据集与配置哈希">—</span>
-    <span id="live-status" class="live ok" title="逐周期自服务端读取新落盘的已收盘 K 线；点击暂停或恢复">实时</span>
+    <span class="dot" aria-hidden="true"></span>
+    <div class="brand-text">
+      <h1>SACW 结构标注工作台</h1>
+      <div class="brand-sub">
+        <span id="sacw-version" class="badge">V1.1.2</span>
+        <span id="spec-version" class="badge dim">V1.4.8</span>
+        <span class="brand-sep" aria-hidden="true">·</span>
+        <span id="instrument" class="instrument">—</span>
+      </div>
+    </div>
   </div>
 
-  <nav class="tabs" role="tablist">
-    <button type="button" class="tab active" data-tab="annotate" role="tab">结构标注</button>
-    <button type="button" class="tab" data-tab="regression" role="tab">PB 回归样本</button>
-    <button type="button" class="tab" data-tab="dataset" role="tab">数据集与快照</button>
+  <nav class="tabs" role="tablist" aria-label="工作台视图">
+    <button type="button" class="tab active" id="tab-annotate" data-tab="annotate"
+      role="tab" aria-selected="true" aria-controls="view-annotate" tabindex="0">结构标注</button>
+    <button type="button" class="tab" id="tab-regression" data-tab="regression"
+      role="tab" aria-selected="false" aria-controls="view-regression" tabindex="-1">PB 回归样本</button>
+    <button type="button" class="tab" id="tab-dataset" data-tab="dataset"
+      role="tab" aria-selected="false" aria-controls="view-dataset" tabindex="-1">数据集与快照</button>
   </nav>
 
-  <div class="controls">
-    <div class="group">
-      <span class="group-label">权限</span>
-      <span id="can-open" class="pill pill-off">CanOpen</span>
-      <span id="can-hold" class="pill pill-off">CanHold</span>
-    </div>
-    <div class="group">
-      <span class="group-label">宏观</span>
-      <span id="macro-summary" class="macro-summary">—</span>
-    </div>
+  <div class="topbar-side">
+    <span id="source-badge" class="meta-chip dim" title="数据来源与会话">—</span>
+    <span id="dataset-badge" class="meta-chip mono dim" title="数据集与配置哈希">—</span>
+    <button type="button" id="live-status" class="live ok"
+      title="点击补齐缺失的 K 线；Shift+点击暂停或恢复轮询" aria-live="polite">实时</button>
+    <button type="button" id="help-toggle" class="icon-btn" aria-haspopup="dialog"
+      aria-controls="help-dialog" title="使用说明与快捷键（?）" aria-label="打开使用说明">?</button>
   </div>
 </header>
 
-<main id="view-annotate" class="view active">
+<main id="view-annotate" class="view active" role="tabpanel" aria-labelledby="tab-annotate">
 
-  <section class="charts">
-    <div class="tf-bar" id="timeframe-buttons"></div>
-
-    <div class="chart-head">
-      <span id="legend-ohlc" class="legend">—</span>
-      <span id="legend-ind" class="legend dim">—</span>
-      <span id="legend-zigzag" class="legend dim">—</span>
-      <span id="legend-atr" class="legend dim">—</span>
+  <section class="charts" id="chart-region">
+    <div class="chart-top">
+      <div class="tf-bar" id="timeframe-buttons" role="group" aria-label="时间周期"></div>
+      <div class="view-controls group" role="group" aria-label="图表视图">
+        <span class="group-label">视图</span>
+        <button type="button" class="view-btn" id="view-reset"
+          title="重置为自适应视图（双击图表或按 R）">自适应</button>
+        <button type="button" class="view-btn" id="view-fit" title="显示已加载的全部 K 线">全部</button>
+      </div>
     </div>
 
-    <div id="price-chart" class="chart price"></div>
+    <div class="context-strip">
+      <div class="context-permissions">
+        <span class="group-label">环境许可</span>
+        <span id="can-open" class="pill pill-off" title="CanOpen：当前多周期环境是否允许开仓（识别层结论）">CanOpen</span>
+        <span id="can-hold" class="pill pill-off" title="CanHold：当前多周期环境是否允许持仓（识别层结论）">CanHold</span>
+      </div>
+      <div id="macro-summary" class="macro-summary" aria-label="多周期方向一致性">—</div>
+    </div>
+
+    <div class="chart-head">
+      <div class="chart-id">
+        <div class="chart-id-line">
+          <span id="chart-tf" class="chart-tf">4H</span>
+          <span id="chart-state" class="state-chip st-neutral">—</span>
+        </div>
+        <div id="chart-meta" class="chart-meta">—</div>
+      </div>
+      <div class="chart-legend" aria-live="off">
+        <span id="legend-ohlc" class="legend">—</span>
+        <span id="legend-ind" class="legend dim">—</span>
+        <span id="legend-zigzag" class="legend dim">—</span>
+        <span id="legend-atr" class="legend dim">—</span>
+      </div>
+    </div>
+
+    <div id="price-chart" class="chart price" role="img" aria-label="K 线主图：价格、SMA22、ZigZag 与结构标注"></div>
 
     <div class="chart-caption">
       ATR14 副图 · <span class="tag-na">ATR_MA22 = N/A / SPEC_AMBIGUITY</span>
-      （V1.4.8 未定义该指标，不绘制、不参与决策，SACW 17.1）
+      <span class="muted">（V1.4.8 未定义该指标，不绘制、不参与决策，SACW 17.1）</span>
     </div>
-    <div id="atr-chart" class="chart atr"></div>
+    <div id="atr-chart" class="chart atr" role="img" aria-label="ATR14 副图"></div>
 
     <div class="toolbar">
-      <div class="group" role="group" aria-label="图层">
-        <span class="group-label" title="仅控制图表显示，不进入标注流程">显示图层（仅显隐）</span>
-        <label><input type="checkbox" id="toggle-sma" checked /> SMA22</label>
-        <label><input type="checkbox" id="toggle-atr" checked /> ATR14</label>
-        <label><input type="checkbox" id="toggle-zigzag" checked /> ZigZag</label>
-        <label><input type="checkbox" id="toggle-candidate" checked /> 候选</label>
-        <label><input type="checkbox" id="toggle-swing" checked /> 摆动点</label>
-        <label><input type="checkbox" id="toggle-zone" checked /> Zone</label>
-        <label><input type="checkbox" id="toggle-structure" checked /> N 结构</label>
-        <label><input type="checkbox" id="toggle-levels" checked /> 保护点</label>
-        <label><input type="checkbox" id="toggle-manual" checked /> 人工标注</label>
-      </div>
-
-      <div class="group" role="group" aria-label="视图">
-        <span class="group-label" title="时间轴与价格轴自适应">视图</span>
-        <button type="button" class="view-btn" id="view-reset" title="重置为自适应视图（双击图表或按 R）">自适应</button>
-        <button type="button" class="view-btn" id="view-fit" title="显示已加载的全部 K 线">全部</button>
-      </div>
-
-      <div class="group" role="group" aria-label="标注工具">
-        <span class="group-label">标注工具（先选工具）</span>
-        <span id="current-tool" class="badge dim">当前：选择</span>
-        <button type="button" class="tool active" data-tool="select">选择</button>
-        <button type="button" class="tool" data-tool="swing">Swing</button>
-        <button type="button" class="tool" data-tool="nstructure">N 结构</button>
-        <button type="button" class="tool" data-tool="zone">Zone</button>
-        <button type="button" class="tool" data-tool="protected">保护点</button>
-        <button type="button" class="tool" data-tool="state">状态区间</button>
+      <div class="toolbar-row toolbar-tools">
+        <span class="group-label">标注工具</span>
+        <span id="current-tool" class="badge dim" aria-live="polite">当前：选择</span>
+        <button type="button" class="tool active" data-tool="select" aria-pressed="true">选择</button>
+        <button type="button" class="tool" data-tool="swing" aria-pressed="false">Swing</button>
+        <button type="button" class="tool" data-tool="nstructure" aria-pressed="false">N 结构</button>
+        <button type="button" class="tool" data-tool="zone" aria-pressed="false">Zone</button>
+        <button type="button" class="tool" data-tool="protected" aria-pressed="false">保护点</button>
+        <button type="button" class="tool" data-tool="state" aria-pressed="false">状态区间</button>
         <label class="field inline hidden" id="n-structure-status-box">
           <span>N 状态</span>
           <select id="n-structure-status">
@@ -111,23 +122,51 @@
           <select id="state-interval-state"></select>
         </label>
       </div>
-    </div>
 
-    <p id="tool-hint" class="hint">提示：图层的勾选只控制显示；要标注请先在「标注工具」中选择 Swing / N 结构 / Zone / 保护点 / 状态区间，再点击图表。Swing 需要两次点击（发生 Bar → 确认 Bar）。</p>
+      <div class="toolbar-row toolbar-secondary">
+        <details class="layers">
+          <summary>显示图层 <span class="muted">仅控制显隐</span></summary>
+          <div class="layer-grid">
+            <label><input type="checkbox" id="toggle-sma" checked /> SMA22</label>
+            <label><input type="checkbox" id="toggle-atr" checked /> ATR14</label>
+            <label><input type="checkbox" id="toggle-zigzag" checked /> ZigZag</label>
+            <label><input type="checkbox" id="toggle-candidate" checked /> 候选</label>
+            <label><input type="checkbox" id="toggle-swing" checked /> 摆动点</label>
+            <label><input type="checkbox" id="toggle-zone" checked /> Zone</label>
+            <label><input type="checkbox" id="toggle-structure" checked /> N 结构</label>
+            <label><input type="checkbox" id="toggle-levels" checked /> 保护点</label>
+            <label><input type="checkbox" id="toggle-manual" checked /> 人工标注</label>
+          </div>
+        </details>
+        <p id="tool-hint" class="hint">提示：勾选图层只控制显示；要标注请先在「标注工具」中选择工具，再点击图表。Swing 需要两次点击（发生 Bar → 确认 Bar）。</p>
+      </div>
+    </div>
   </section>
 
   <aside class="panel">
-      <div class="panel-tabs" role="tablist" aria-label="侧栏视图">
-        <button type="button" class="panel-tab active" data-panel="annotate">标注</button>
-        <button type="button" class="panel-tab" data-panel="structure">结构</button>
-        <button type="button" class="panel-tab" data-panel="compare">比对</button>
-      </div>
-      <div id="panel-annotate" class="panel-view active">
-    <div class="annotation-box">
-      <p class="hint workflow-hint">
-        标注先保存为 <code>DRAFT</code>，再按 提交 → 审核 → 批准 → 冻结 推进。
-        冻结后才成为 Ground Truth，才可运行程序回放差异比较。
-      </p>
+    <div class="panel-tabs" role="tablist" aria-label="侧栏视图">
+      <button type="button" class="panel-tab active" id="panel-tab-annotate" data-panel="annotate"
+        role="tab" aria-selected="true" aria-controls="panel-annotate">标注</button>
+      <button type="button" class="panel-tab" id="panel-tab-structure" data-panel="structure"
+        role="tab" aria-selected="false" aria-controls="panel-structure">结构</button>
+      <button type="button" class="panel-tab" id="panel-tab-compare" data-panel="compare"
+        role="tab" aria-selected="false" aria-controls="panel-compare">比对</button>
+    </div>
+
+    <div id="panel-annotate" class="panel-view active" role="tabpanel" aria-labelledby="panel-tab-annotate">
+      <section class="panel-section overview-card">
+        <div class="section-head">
+          <h2>项目进度</h2>
+          <span id="annotation-summary" class="summary-line">—</span>
+        </div>
+        <div id="project-breakdown" class="breakdown" aria-label="标注状态分布"></div>
+        <div id="project-progress" class="progress" role="img" aria-label="标注状态进度"></div>
+        <p class="hint workflow-hint">
+          标注先保存为 <code>DRAFT</code>，再按 提交 → 审核 → 批准 → 冻结 推进。
+          只有冻结后的标注才成为 Ground Truth，并参与差异比较。
+        </p>
+      </section>
+
       <details class="usage">
         <summary>使用说明 · 连续标注</summary>
         <ol>
@@ -139,14 +178,31 @@
           <li><b>状态区间</b>：选择状态后点击开始 Bar 和结束 Bar；保存 valid_from / valid_to / known_at。</li>
           <li>点击待提交面板的「<b>保存草稿</b>」入库为 <code>DRAFT</code>；保存后可继续标注下一个。</li>
           <li>已保存标注显示在「人工标注」图层；可删除未冻结标注或导出 JSON。</li>
-          <li>需要参与比对时，再把标注推进到 APPROVED，并点击「冻结黄金样本」；只有冻结后的 Ground Truth 才进入 Swing / Zone / N 结构差异比较与程序回放。</li>
+          <li>需要参与比对时，再把标注推进到 APPROVED，并点击「冻结黄金样本」。</li>
         </ol>
       </details>
+
       <label class="field inline continuous-mode">
         <input type="checkbox" id="continuous-annotation" checked />
         <span>保存后继续标注（保持当前工具）</span>
       </label>
-      <p id="annotation-summary" class="summary-line">项目标注：—</p>
+
+      <div class="annotation-filters">
+        <label class="field search-field">
+          <span class="sr-only">搜索标注</span>
+          <input id="annotation-search" type="search" placeholder="搜索标注（类型 / ID / 价格 / 状态）" />
+        </label>
+        <label class="field inline" title="按对象时间过滤（Swing 用发生时间，区间用 valid_from）">
+          <span>自</span><input id="annotation-time-from" type="date" aria-label="标注起始日期" />
+        </label>
+        <label class="field inline">
+          <span>至</span><input id="annotation-time-to" type="date" aria-label="标注结束日期" />
+        </label>
+        <button type="button" id="clear-annotation-filters" class="ghost">清除</button>
+        <button type="button" id="annotation-undo" class="ghost" disabled>撤销</button>
+        <button type="button" id="annotation-redo" class="ghost" disabled>重做</button>
+      </div>
+
       <div id="zone-mode-box" class="zone-box hidden">
         <label class="field inline">
           <span>Zone 模式</span>
@@ -157,16 +213,17 @@
         </label>
         <div id="zone-human-fields" class="zone-human-fields hidden">
           <label class="field inline"><span>Lower</span>
-            <input id="zone-human-lower" type="text" inputmode="decimal" />
+            <input id="zone-human-lower" type="text" inputmode="decimal" aria-label="人工 Lower" />
           </label>
           <label class="field inline"><span>Upper</span>
-            <input id="zone-human-upper" type="text" inputmode="decimal" />
+            <input id="zone-human-upper" type="text" inputmode="decimal" aria-label="人工 Upper" />
           </label>
           <label class="field inline"><span>Center</span>
-            <input id="zone-human-center" type="text" inputmode="decimal" />
+            <input id="zone-human-center" type="text" inputmode="decimal" aria-label="人工 Center" />
           </label>
         </div>
       </div>
+
       <div id="anchor-picker" class="anchor-picker hidden">
         <div class="picker-head">
           <span>锚点候选（本周期已确认摆动点）</span>
@@ -174,9 +231,16 @@
         </div>
         <div id="anchor-chips" class="anchor-chips"></div>
       </div>
+
       <div id="pending-annotation" class="pending hidden"></div>
+
+      <div class="section-head list-head">
+        <h2>本周期标注</h2>
+        <span id="annotation-list-count" class="muted">—</span>
+      </div>
       <ul id="annotation-list" class="annotations"></ul>
-      <div class="ops">
+
+      <div class="ops ops-footer">
         <button type="button" id="refresh-annotations">刷新标注</button>
         <button type="button" id="export-annotations" class="ghost">导出标注 JSON</button>
         <button type="button" id="freeze-golden" class="ghost">冻结黄金样本（APPROVED → FROZEN）</button>
@@ -184,163 +248,262 @@
       <p id="annotation-status" class="status">—</p>
     </div>
 
-          </div>
-      <div id="panel-structure" class="panel-view">
+    <div id="panel-structure" class="panel-view" role="tabpanel" aria-labelledby="panel-tab-structure">
+      <section class="panel-section">
+        <div class="section-head"><h2>多周期状态</h2><span class="muted">七周期独立状态</span></div>
+        <div class="table-wrap">
+          <table class="states">
+            <thead>
+              <tr><th>周期</th><th>状态</th><th>ZigZag</th><th>摆动</th><th>N 结构</th><th>Zone</th></tr>
+            </thead>
+            <tbody id="state-rows"></tbody>
+          </table>
+        </div>
+      </section>
 
+      <section class="panel-section">
+        <div class="section-head"><h2>本周期指标</h2><span id="structure-tf" class="muted">—</span></div>
+        <dl id="levels" class="stats"></dl>
+      </section>
 
-    <h2>多周期状态</h2>
-    <table class="states">
-      <thead>
-        <tr><th>周期</th><th>状态</th><th>ZigZag</th><th>摆动</th><th>N 结构</th><th>Zone</th></tr>
-      </thead>
-      <tbody id="state-rows"></tbody>
-    </table>
+      <section class="panel-section">
+        <div class="section-head"><h2>ATR 快照检查器</h2><span class="muted">按字段查看时点值</span></div>
+        <div class="snapshot-box">
+          <label class="field">
+            <span>字段</span>
+            <select id="atr-snapshot-field">
+              <option value="signal_decision_atr_15m">signal_decision_atr_15m</option>
+              <option value="execution_reference_atr_15m">execution_reference_atr_15m</option>
+              <option value="initial_stop_atr_15m">initial_stop_atr_15m</option>
+              <option value="stop_update_atr_15m">stop_update_atr_15m</option>
+            </select>
+          </label>
+          <dl id="atr-snapshot" class="stats compact"></dl>
+        </div>
+      </section>
 
-    <h2>本周期指标</h2>
-    <dl id="levels" class="stats"></dl>
+      <section class="panel-section">
+        <div class="section-head"><h2>Zone（本周期）</h2><span class="muted">边界由后端计算</span></div>
+        <ul id="zone-list" class="objects"></ul>
+      </section>
 
-    <h2>ATR 快照检查器</h2>
-    <div class="snapshot-box">
-      <label class="field">
-        <span>字段</span>
-        <select id="atr-snapshot-field">
-          <option value="signal_decision_atr_15m">signal_decision_atr_15m</option>
-          <option value="execution_reference_atr_15m">execution_reference_atr_15m</option>
-          <option value="initial_stop_atr_15m">initial_stop_atr_15m</option>
-          <option value="stop_update_atr_15m">stop_update_atr_15m</option>
-        </select>
-      </label>
-      <dl id="atr-snapshot" class="stats compact"></dl>
+      <section class="panel-section">
+        <div class="section-head"><h2>N 结构（本周期）</h2><span class="muted">失效判定见规格</span></div>
+        <p class="notice" id="n-invalidation-notice">—</p>
+        <ul id="structure-list" class="objects"></ul>
+      </section>
     </div>
 
-    <h2>Zone（本周期）</h2>
-    <ul id="zone-list" class="objects"></ul>
-
-    <h2>N 结构（本周期）</h2>
-    <p class="notice" id="n-invalidation-notice">—</p>
-    <ul id="structure-list" class="objects"></ul>
-
+    <div id="panel-compare" class="panel-view" role="tabpanel" aria-labelledby="panel-tab-compare">
+      <section class="panel-section">
+        <div class="section-head"><h2>Ground Truth 差异比较</h2><span class="muted">FROZEN vs 程序回放</span></div>
+        <div class="annotation-box comparison-box">
+          <p class="hint">
+            只比较黄金样本冻结清单中的 FROZEN 人工标注与 V1.4.8 程序回放输出。
+            匹配结果不是对错判定，需人工复核差异报告。
+          </p>
+          <div class="ops">
+            <button type="button" id="compare-swings" class="ghost" disabled>Swing 差异</button>
+            <button type="button" id="compare-zones" class="ghost" disabled>Zone 差异</button>
+            <button type="button" id="compare-n-structures" class="ghost" disabled>N 结构差异</button>
+            <button type="button" id="compare-state-intervals" class="ghost" disabled>状态区间差异</button>
           </div>
-      <div id="panel-compare" class="panel-view">
-<h2>Ground Truth 差异比较</h2>
-    <div class="annotation-box comparison-box">
-      <p class="hint">
-        只比较黄金样本冻结清单中的 FROZEN 人工标注与 V1.4.8 程序回放输出。
-        匹配结果不是对错判定，需人工复核差异报告。
-      </p>
-      <div class="ops">
-        <button type="button" id="compare-swings" disabled>Swing 差异</button>
-        <button type="button" id="compare-zones" disabled>Zone 差异</button>
-        <button type="button" id="compare-n-structures" disabled>N 结构差异</button>
-        <button type="button" id="compare-state-intervals" disabled>状态区间差异</button>
-      </div>
-      <p id="comparison-status" class="status">尚未冻结黄金样本。</p>
-      <pre id="comparison-output" class="code-block">—</pre>
-    </div>
+          <p id="comparison-status" class="status">尚未冻结黄金样本。</p>
+          <pre id="comparison-output" class="code-block">—</pre>
+        </div>
+      </section>
 
-    <h2>程序回放</h2>
-    <div class="annotation-box">
-      <p class="hint">使用最新冻结黄金样本的 baseline 绑定，回放 V1.4.8 结构事件并持久化，供差异比较追溯。</p>
-      <div class="ops">
-        <button type="button" id="run-replay">运行程序回放</button>
-        <button type="button" id="refresh-replay" class="ghost">刷新回放列表</button>
-      </div>
-      <p id="replay-status" class="status">尚未运行。</p>
-      <pre id="replay-output" class="code-block">—</pre>
-    </div>
-
-    <h2>说明</h2>
-    <ul class="notes">
-      <li>七个周期共享算法、各自独立状态（规格 2.1）。</li>
-      <li>N 结构失效价在 ATR 时点裁定前不产出，标记 <code>SPEC_AMBIGUITY</code>（SACW 27.6）。</li>
-      <li>Zone 的 ANCHOR_ONLY 边界由后端 V1.4.8 公式计算，前端不得重写（SACW 21.2）。</li>
-      <li>ATR_MA22 在 V1.4.8 未定义，一律显示 <code>N/A / SPEC_AMBIGUITY</code>。</li>
-      <li>Setup / Signal / 执行 / 风控在 P1 阶段实现；当前只做结构与标注。</li>
-    </ul>
+      <section class="panel-section">
+        <div class="section-head"><h2>程序回放</h2><span class="muted">baseline 绑定</span></div>
+        <div class="annotation-box">
+          <p class="hint">使用最新冻结黄金样本的 baseline 绑定，回放 V1.4.8 结构事件并持久化，供差异比较追溯。</p>
+          <div class="ops">
+            <button type="button" id="run-replay" class="primary">运行程序回放</button>
+            <button type="button" id="refresh-replay" class="ghost">刷新回放列表</button>
           </div>
-      <p id="status-line" class="status global-status">加载中…</p>
-    </aside>
+          <p id="replay-status" class="status">尚未运行。</p>
+          <pre id="replay-output" class="code-block">—</pre>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-head"><h2>口径与边界</h2><span class="muted">V1.4.8 / SACW V1.1.2</span></div>
+        <ul class="notes">
+          <li>七个周期共享算法、各自独立状态（规格 2.1）。</li>
+          <li>N 结构失效价在 ATR 时点裁定前不产出，标记 <code>SPEC_AMBIGUITY</code>（SACW 27.6）。</li>
+          <li>Zone 的 ANCHOR_ONLY 边界由后端 V1.4.8 公式计算，前端不得重写（SACW 21.2）。</li>
+          <li>ATR_MA22 在 V1.4.8 未定义，一律显示 <code>N/A / SPEC_AMBIGUITY</code>。</li>
+          <li>Setup / Signal / 执行 / 风控在 P1 阶段实现；当前只做结构与标注。</li>
+        </ul>
+      </section>
+    </div>
+  </aside>
 </main>
 
-<main id="view-regression" class="view">
+<main id="view-regression" class="view" role="tabpanel" aria-labelledby="tab-regression">
   <section class="regression-left">
-    <div class="regression-controls">
-      <input type="search" id="case-search" placeholder="搜索 PB 编号 / 标题 / 章节" />
-      <select id="case-status-filter">
-        <option value="">全部状态</option>
-        <option value="PASSED">PASSED</option>
-        <option value="FAILED">FAILED</option>
-        <option value="BLOCKED">BLOCKED</option>
-        <option value="READY">READY（未运行）</option>
-      </select>
-      <button type="button" id="run-suite">运行全套 PB-01..51</button>
+    <div class="view-head">
+      <div>
+        <h2 class="page-title">PB 回归样本</h2>
+        <p class="page-sub">PB-01..PB-51 · 结构化预期与负向断言；阻塞项逐条可见，不伪造通过。</p>
+      </div>
+      <button type="button" id="run-suite" class="primary">运行全套</button>
+    </div>
+    <div id="regression-kpis" class="kpi-strip"></div>
+    <div class="filter-row">
+      <label class="field search-field">
+        <span class="sr-only">搜索 PB 样本</span>
+        <input type="search" id="case-search" placeholder="搜索 PB 编号 / 标题 / 章节" />
+      </label>
+      <label class="field inline">
+        <span class="sr-only">按状态筛选</span>
+        <select id="case-status-filter">
+          <option value="">全部状态</option>
+          <option value="PASSED">PASSED</option>
+          <option value="FAILED">FAILED</option>
+          <option value="BLOCKED">BLOCKED</option>
+          <option value="READY">READY（未运行）</option>
+        </select>
+      </label>
     </div>
     <p id="suite-meta" class="suite-meta">尚未运行。</p>
     <ul id="case-list" class="case-list"></ul>
   </section>
 
   <section class="regression-right">
-    <h2 id="case-title">选择一个 PB 样本</h2>
+    <div class="case-head">
+      <h2 id="case-title">选择一个 PB 样本</h2>
+      <button type="button" id="run-case" class="primary">运行当前样本</button>
+    </div>
+    <p id="case-empty-hint" class="hint">从左侧列表选择一个 PB 样本，查看结构化预期、阻塞原因与断言结果。</p>
     <dl id="case-facts" class="stats"></dl>
     <h3>结构化预期</h3>
     <pre id="case-expected" class="code-block">—</pre>
-    <h3>断言结果</h3>
-    <div class="ops">
-      <button type="button" id="run-case">运行当前样本</button>
-    </div>
+    <div class="section-head"><h3>断言结果</h3><span class="muted">按样本运行后刷新</span></div>
     <ul id="case-assertions" class="assertions"></ul>
     <h3>运行汇总</h3>
     <pre id="suite-summary" class="code-block">—</pre>
   </section>
 </main>
 
-<main id="view-dataset" class="view">
+<main id="view-dataset" class="view" role="tabpanel" aria-labelledby="tab-dataset">
   <section class="dataset-left">
-    <h2>多周期数据覆盖</h2>
-    <table class="coverage">
-      <thead>
-        <tr><th>周期</th><th>Bar</th><th>缺失</th><th>重复</th><th>乱序</th><th>完整</th><th>起</th><th>止</th></tr>
-      </thead>
-      <tbody id="coverage-rows"></tbody>
-    </table>
-
-    <h2>数据集与配置</h2>
-    <dl id="dataset-facts" class="stats"></dl>
-
-    <h2>初始状态快照</h2>
-    <div class="ops">
-      <label class="field inline">
-        <span>周期</span>
-        <select id="snapshot-timeframe"></select>
-      </label>
-      <button type="button" id="build-snapshot">生成快照</button>
-      <button type="button" id="save-snapshot" class="ghost">保存快照</button>
+    <div class="view-head">
+      <div>
+        <h2 class="page-title">数据集与快照</h2>
+        <p class="page-sub">覆盖完整性、配置哈希、初始状态快照与黄金样本冻结链路。</p>
+      </div>
     </div>
-    <pre id="snapshot-output" class="code-block">—</pre>
-    <h3>已保存快照</h3>
-    <ul id="snapshot-artifacts" class="objects"></ul>
+    <div id="dataset-kpis" class="kpi-strip"></div>
+
+    <section class="panel-section">
+      <div class="section-head"><h2>多周期数据覆盖</h2><span class="muted">缺口 / 重复 / 乱序</span></div>
+      <div class="table-wrap">
+        <table class="coverage">
+          <thead>
+            <tr><th>周期</th><th>Bar</th><th>缺失</th><th>重复</th><th>乱序</th><th>完整</th><th>起</th><th>止</th></tr>
+          </thead>
+          <tbody id="coverage-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head"><h2>数据集与配置</h2><span class="muted">冻结口径</span></div>
+      <dl id="dataset-facts" class="stats"></dl>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-head"><h2>初始状态快照</h2><span class="muted">可保存为 artifact</span></div>
+      <div class="snapshot-controls">
+        <label class="field inline">
+          <span>周期</span>
+          <select id="snapshot-timeframe" aria-label="快照周期"></select>
+        </label>
+        <button type="button" id="build-snapshot" class="primary">生成快照</button>
+        <button type="button" id="save-snapshot" class="ghost">保存快照</button>
+      </div>
+      <pre id="snapshot-output" class="code-block">—</pre>
+      <h3>已保存快照</h3>
+      <ul id="snapshot-artifacts" class="objects"></ul>
+    </section>
   </section>
 
   <section class="dataset-right">
-    <h2>黄金样本</h2>
-    <div class="ops">
-      <label class="field inline">
-        <span>切分</span>
-        <select id="golden-split">
-          <option value="CALIBRATION">CALIBRATION</option>
-          <option value="VALIDATION">VALIDATION</option>
-          <option value="HOLDOUT" selected>HOLDOUT</option>
-        </select>
-      </label>
-      <button type="button" id="freeze-golden-2">冻结黄金样本</button>
-    </div>
-    <p id="ground-truth-hash" class="status">—</p>
-    <ul id="golden-list" class="objects"></ul>
+    <section class="panel-section">
+      <div class="section-head"><h2>黄金样本</h2><span class="muted">FROZEN 才可用</span></div>
+      <div class="snapshot-controls">
+        <label class="field inline">
+          <span>切分</span>
+          <select id="golden-split" aria-label="黄金样本切分">
+            <option value="CALIBRATION">CALIBRATION</option>
+            <option value="VALIDATION">VALIDATION</option>
+            <option value="HOLDOUT" selected>HOLDOUT</option>
+          </select>
+        </label>
+        <button type="button" id="freeze-golden-2" class="primary">冻结黄金样本</button>
+        <button type="button" id="auto-split-golden" class="ghost">自动三分（60/20/20）</button>
+      </div>
+      <p id="ground-truth-hash" class="status">—</p>
+      <p id="split-status" class="status">—</p>
+      <ul id="golden-list" class="objects"></ul>
+    </section>
 
-    <h2>审计日志</h2>
-    <ul id="audit-list" class="audit"></ul>
+    <section class="panel-section">
+      <div class="section-head"><h2>审计日志</h2><span class="muted">最近 60 条</span></div>
+      <ul id="audit-list" class="audit"></ul>
+    </section>
   </section>
 </main>
+
+<footer class="statusbar">
+  <span id="status-line" class="status global-status" role="status" aria-live="polite">加载中…</span>
+  <span class="statusbar-hint">快捷键：R 重置视图 · Ctrl/⌘+Z 撤销 · ? 帮助</span>
+</footer>
+
+<dialog id="help-dialog" class="help-dialog" aria-labelledby="help-title">
+  <div class="help-head">
+    <h2 id="help-title">使用说明</h2>
+    <button type="button" class="icon-btn" data-close aria-label="关闭">×</button>
+  </div>
+  <div class="help-grid">
+    <section>
+      <h3>标注流程</h3>
+      <ol>
+        <li>先在「标注工具」选工具，再在图上点击。</li>
+        <li>保存后为 <code>DRAFT</code>；提交 → 审核 → 批准 → 冻结。</li>
+        <li>只有 <code>FROZEN</code> 标注计入 Ground Truth，可做差异比较。</li>
+      </ol>
+    </section>
+    <section>
+      <h3>工具要点</h3>
+      <ul>
+        <li><b>Swing</b>：两次点击（发生 Bar → 确认 Bar）。</li>
+        <li><b>N 结构</b>：依次点 L1 → H1 → L2 → H2。</li>
+        <li><b>Zone</b>：两个同向摆动点；ANCHOR_ONLY 由后端算边界。</li>
+        <li><b>状态区间</b>：选状态后点开始、结束 Bar。</li>
+      </ul>
+    </section>
+    <section>
+      <h3>快捷键</h3>
+      <ul>
+        <li><kbd>R</kbd> 重置图表视图</li>
+        <li><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Z</kbd> 撤销标注</li>
+        <li><kbd>Shift</kbd> + <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Z</kbd> 重做</li>
+        <li><kbd>?</kbd> 打开本说明</li>
+      </ul>
+    </section>
+    <section>
+      <h3>数据口径</h3>
+      <ul>
+        <li>内部时间 UTC；OKX 会话按配置偏移显示。</li>
+        <li>ATR_MA22 未定义：显示 <code>N/A / SPEC_AMBIGUITY</code>。</li>
+        <li>N 结构失效状态未裁决时标记 <code>SPEC_AMBIGUITY</code>。</li>
+      </ul>
+    </section>
+  </div>
+  <p class="help-foot">SACW V1.1.2 · 规格 V1.4.8</p>
+</dialog>
 
 <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 <script src="/app.js"></script>

@@ -530,6 +530,7 @@ def test_state_interval_and_protected_point_validation(router: ApiRouter) -> Non
                 "price": "2400.0",
                 "valid_from": "2026-01-01T00:00:00Z",
                 "event_type": "INIT",
+                "source_swing_id": "sw-4h-1",
             },
             "actor": "test",
         },
@@ -703,3 +704,95 @@ def test_state_interval_comparison_uses_frozen_ground_truth(router: ApiRouter) -
     assert report["program_count"] >= 1
     assert report["comparisonId"]
     assert report["results"]
+
+
+def test_patch_requires_expected_revision(router: ApiRouter) -> None:
+    """PATCH 缺失 expected_revision 必须拒绝，不能按无锁放行（SACW 6.2）。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    annotation = _create_swing(router, project_id)
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(f"/api/v1/annotations/{annotation['annotation_id']}")
+    status, envelope = router.dispatch(
+        method="PATCH",
+        path=parsed.path,
+        query=parse_qs(parsed.query),
+        body={
+            "payload": {
+                "direction": "LOW",
+                "price": "2401.0",
+                "occurred_at": "2026-01-01T00:00:00Z",
+                "confirmed_at": "2026-01-01T04:00:00Z",
+            },
+            "actor": "test",
+        },
+    )
+    assert status == 400
+    assert envelope["error"]["code"] == "EXPECTED_REVISION_REQUIRED"
+
+
+def test_annotation_copy_and_filters(router: ApiRouter) -> None:
+    """复制生成新 DRAFT；列表支持时间区间和关键字过滤。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    annotation = _create_swing(router, project_id)
+    status, envelope = _post(
+        router,
+        f"/api/v1/annotations/{annotation['annotation_id']}/copy",
+        {"actor": "test", "reason": "copy"},
+    )
+    assert status == 200, envelope
+    copied = envelope["data"]
+    assert copied["annotation_id"] != annotation["annotation_id"]
+    assert copied["status"] == "DRAFT"
+    assert copied["revision"] == 1
+
+    status, envelope = _get(
+        router,
+        f"/api/v1/annotation-projects/{project_id}/annotations"
+        "?search=2400&time_from=2025-12-01T00:00:00Z",
+    )
+    assert status == 200, envelope
+    assert envelope["data"]["count"] >= 1
+    assert all(
+        item["payload"].get("price") == "2400.0"
+        for item in envelope["data"]["annotations"]
+    )
+
+
+def test_golden_auto_split_generates_three_windows(router: ApiRouter) -> None:
+    """省略区间时按时间顺序自动三分，并返回 time_split_hash（SACW 5.3）。"""
+    status, envelope = _get(router, "/api/v1/annotation-projects")
+    project_id = envelope["data"]["projects"][0]["project_id"]
+    annotation = _create_swing(router, project_id)
+    _approve(router, annotation["annotation_id"])
+    golden = _freeze(router, project_id)
+    assert golden["time_split_hash"]
+    status, envelope = _post(
+        router,
+        f"/api/v1/golden-datasets/{golden['golden_dataset_id']}/split",
+        {"auto": True},
+    )
+    assert status == 200, envelope
+    data = envelope["data"]
+    assert [item["split"] for item in data["splits"]] == [
+        "CALIBRATION",
+        "VALIDATION",
+        "HOLDOUT",
+    ]
+    assert data["time_split_hash"] == golden["time_split_hash"]
+    assert {item["time_split_hash"] for item in data["splits"]} == {data["time_split_hash"]}
+    previous = None
+    for item in data["splits"]:
+        if previous is not None:
+            assert item["range_start"] >= previous
+        assert item["range_end"] > item["range_start"]
+        previous = item["range_end"]
+    status, envelope = _post(
+        router,
+        f"/api/v1/golden-datasets/{golden['golden_dataset_id']}/validate",
+    )
+    assert status == 200, envelope
+    assert envelope["data"]["timeSplitHash"] == golden["time_split_hash"]
+

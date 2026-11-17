@@ -22,10 +22,13 @@ import sys
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Protocol
+from urllib.parse import urlparse
 
 from pa_trend.application import paths
 from pa_trend.application.annotation_store import SacwStore
 from pa_trend.application.data_service import DEFAULT_DEMO_BARS, DataService
+from pa_trend.application.market_sync import MarketSyncService
 from pa_trend.application.regression import RegressionRunner, load_cases, validate_cases
 from pa_trend.config.validation import Stage, validate_startup
 from pa_trend.presentation.api import ApiRouter, read_body, route_path
@@ -46,6 +49,49 @@ _CONTENT_TYPES = {
     ".png": "image/png",
 }
 
+#: 工作台是本地单机工具，请求体保持上限，避免异常请求占用内存。
+MAX_BODY_BYTES = 2 * 1024 * 1024
+
+#: 写操作必须满足的浏览器来源约束；GET 不受影响。
+_WRITE_METHODS = frozenset({"POST", "PATCH", "DELETE"})
+
+_SECURITY_HEADERS = (
+    (
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+        "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    ),
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+    ("Permissions-Policy", "camera=(), microphone=(), geolocation=()"),
+)
+
+
+class HeadersLike(Protocol):
+    """请求头的最小读取接口。"""
+
+    def get(self, name: str, default: str | None = None) -> str | None:
+        """读取一个请求头。"""
+        ...
+
+
+def _is_cross_site(headers: HeadersLike) -> bool:
+    """判断写请求是否来自其他站点（浏览器 CSRF / DNS rebinding）。"""
+    site = str(headers.get("Sec-Fetch-Site") or "").strip().lower()
+    if site and site not in {"same-origin", "none"}:
+        return True
+    origin = str(headers.get("Origin") or "").strip()
+    if not origin:
+        return False
+    host = str(headers.get("Host") or "").strip().lower()
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return True
+    return not host or parsed.netloc.lower() != host
+
 
 def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHandler]:
     """构造绑定到给定路由与静态目录的请求处理器。"""
@@ -53,7 +99,11 @@ def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHa
     class SacwRequestHandler(BaseHTTPRequestHandler):
         """静态文件 + JSON API 请求处理器。"""
 
-        server_version = "SACW/1.1.2"
+        server_version = "SACW"
+
+        def version_string(self) -> str:
+            """不在响应头泄露解释器版本。"""
+            return self.server_version
 
         def do_GET(self) -> None:
             self._dispatch("GET")
@@ -72,6 +122,10 @@ def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHa
             if not path.startswith("/api/"):
                 self._serve_static(path)
                 return
+            if method in _WRITE_METHODS:
+                rejected = self._reject_unsafe_write()
+                if rejected:
+                    return
             try:
                 body = read_body(self)
             except Exception as exc:
@@ -92,6 +146,67 @@ def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHa
             )
             self._send_json(envelope, status=status)
 
+        def _reject_unsafe_write(self) -> bool:
+            """写请求的跨站与请求体边界检查；被拒绝时返回 True。"""
+            if _is_cross_site(self.headers):
+                self._send_json(
+                    {
+                        "data": None,
+                        "meta": {"request_id": "-"},
+                        "error": {
+                            "code": "CROSS_ORIGIN_BLOCKED",
+                            "message": "cross-site write requests are not allowed",
+                        },
+                    },
+                    status=HTTPStatus.FORBIDDEN,
+                )
+                return True
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0:
+                self._send_json(
+                    {
+                        "data": None,
+                        "meta": {"request_id": "-"},
+                        "error": {"code": "INVALID_LENGTH", "message": "invalid Content-Length"},
+                    },
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return True
+            if length > MAX_BODY_BYTES:
+                self._send_json(
+                    {
+                        "data": None,
+                        "meta": {"request_id": "-"},
+                        "error": {"code": "BODY_TOO_LARGE", "message": "request body too large"},
+                    },
+                    status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                )
+                return True
+            if length:
+                content_type = str(self.headers.get("Content-Type") or "")
+                media_type = content_type.split(";", 1)[0].strip().lower()
+                if media_type != "application/json":
+                    self._send_json(
+                        {
+                            "data": None,
+                            "meta": {"request_id": "-"},
+                            "error": {
+                                "code": "UNSUPPORTED_MEDIA_TYPE",
+                                "message": "write requests must use application/json",
+                            },
+                        },
+                        status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                    )
+                    return True
+            return False
+
+        def _send_security_headers(self) -> None:
+            for name, value in _SECURITY_HEADERS:
+                self.send_header(name, value)
+
         def _serve_static(self, url_path: str) -> None:
             resolved = self._resolve_static(url_path)
             if resolved is None:
@@ -110,6 +225,7 @@ def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHa
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self._send_security_headers()
             self.end_headers()
             self.wfile.write(body)
 
@@ -130,6 +246,7 @@ def build_handler(router: ApiRouter, *, web_dir: Path) -> type[BaseHTTPRequestHa
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self._send_security_headers()
             self.end_headers()
             self.wfile.write(body)
 
@@ -172,7 +289,63 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="会话偏移小时数；缺省取 research.session_offset_hours",
     )
+    parser.add_argument(
+        "--proxy-url",
+        default=None,
+        help="按需补齐时传给采集器的 OKX 代理；缺省沿用环境变量或直连",
+    )
+    parser.add_argument(
+        "--sync-timeout-secs",
+        type=float,
+        default=300.0,
+        help="单次按需补齐的等待上限（默认 300 秒）",
+    )
     return parser
+
+
+def _build_sync_service(
+    args: argparse.Namespace,
+    catalog_dir: Path,
+    service: DataService,
+) -> MarketSyncService | None:
+    """按运行模式构建按需补齐服务（合成数据下不提供）。"""
+    if args.demo:
+        return None
+    return MarketSyncService(
+        catalog_dir=catalog_dir,
+        configs_dir=args.configs,
+        instrument_id=args.instrument,
+        session_offset_hours=service.session_offset_hours,
+        proxy_url=args.proxy_url,
+        timeout_secs=args.sync_timeout_secs,
+    )
+
+
+def _report_startup_freshness(sync: MarketSyncService) -> None:
+    """启动时报告数据新鲜度（只读，不去补齐）。
+
+    工作台不替用户访问交易所：这里只把「落后多少」讲清楚，补齐由页面上的
+    「实时」按钮按需触发，或另开常驻的采集器进程。
+    """
+    freshness = sync.freshness()
+    if not freshness["stale"]:
+        print(f"数据新鲜度: 全部周期已追平当前 UTC（{freshness['nowUtc']}）")
+        return
+
+    print("数据新鲜度: 以下周期落后于当前 UTC", file=sys.stderr)
+    for row in freshness["timeframes"]:
+        if not row["behind"]:
+            continue
+        print(
+            f"  - {row['timeframe']}: 末根 {row['lastOpen']} "
+            f"缺 {row['tailMissingClosed']} 根已收盘 K 线",
+            file=sys.stderr,
+        )
+    print(
+        "  提示：打开页面后点击右上角「实时」按钮补齐，"
+        "或运行 scripts/run_collector.py 常驻采集。",
+        file=sys.stderr,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -235,11 +408,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     regression.sync_cases(cases)
 
+    sync = _build_sync_service(args, catalog_dir, service)
+    if sync is not None:
+        _report_startup_freshness(sync)
+
     router = ApiRouter(
         service=service,
         store=store,
         regression=regression,
         configs_dir=args.configs,
+        sync=sync,
     )
     handler = build_handler(router, web_dir=WEB_DIR)
     try:
@@ -265,6 +443,12 @@ def main(argv: list[str] | None = None) -> int:
 
     url = f"http://{args.host}:{args.port}/"
     print(f"SACW 工作台已启动: {url}")
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        print(
+            "警告：工作台没有身份认证，且写接口会直接修改本地标注库；"
+            "对外监听时请放在可信内网或反向代理鉴权之后。",
+            file=sys.stderr,
+        )
     print(f"数据来源: {service.source}（合约 {service.instrument_id}）")
     if not args.demo:
         print(f"数据目录: {catalog_dir}")
