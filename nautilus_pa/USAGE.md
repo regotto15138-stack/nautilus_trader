@@ -239,7 +239,7 @@ PYTHONPATH=src $VENV scripts/serve_chart.py --store /tmp/sacw.sqlite3
 | `--port` | `8787` | 监听端口 |
 | `--code-commit` | 无 | 写入回归记录的代码版本 |
 | `--session-offset-hours` | 配置中的 `research.session_offset_hours`（8） | 会话偏移 |
-| `--proxy-url` | 无 | 点「实时」徽章补数时传给采集器的 OKX 代理；不填则补数多半连不上 |
+| `--proxy-url` | `http://172.21.192.1:7890` | 点「实时」徽章补数时传给采集器的 OKX 代理；传空字符串表示直连 |
 | `--sync-timeout-secs` | 300 | 单次按需补数的等待上限 |
 
 #### 端口被占用
@@ -306,10 +306,18 @@ PYTHONPATH=src $VENV scripts/serve_chart.py --port 8788
 ```
 
 工作台不替用户访问交易所：补齐要么点按钮按需触发，要么另开常驻采集器。
-补数需要网络，所以 `serve_chart.py` 要带 `--proxy-url` 才能点按钮补数：
+补数需要网络：`serve_chart.py` 默认把 `http://172.21.192.1:7890` 作为 OKX 代理
+传给采集器，启动后直接点按钮即可，不必手动带参数：
 
 ```bash
-PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://172.21.192.1:7890
+PYTHONPATH=src $VENV scripts/serve_chart.py
+```
+
+需要换代理或直连时再覆盖：
+
+```bash
+PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://127.0.0.1:7891
+PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url ""
 ```
 
 随时可从命令行审计目录（退出码 1 表示存在缺口）：
@@ -336,15 +344,15 @@ PYTHONPATH=src $VENV scripts/gap_audit.py --json
 ```bash
 # 终端 1
 PYTHONPATH=src $VENV scripts/run_collector.py --proxy-url http://172.21.192.1:7890
-# 终端 2
-PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://172.21.192.1:7890
+# 终端 2（默认已带 OKX 代理，无需 --proxy-url）
+PYTHONPATH=src $VENV scripts/serve_chart.py
 curl -s "localhost:8787/api/v1/market/live" | python3 -m json.tool | head -20
 ```
 
 只起工作台、按需补数（不常驻采集器）也可以：点顶栏「实时」徽章即补齐一次。
 
 ```bash
-PYTHONPATH=src $VENV scripts/serve_chart.py --proxy-url http://172.21.192.1:7890
+PYTHONPATH=src $VENV scripts/serve_chart.py
 ```
 
 ### 6.1 结构标注页签
@@ -535,7 +543,8 @@ curl -s -X POST localhost:8787/api/v1/regression-suites/v1-4-8/run | python3 -m 
 ## 9. 常见问题
 
 **Q: 采集报错连不上 OKX。**
-A: 直连通常被墙，加 `--proxy-url`。自检：
+A: 直连通常被墙。工作台补数默认已使用 `http://172.21.192.1:7890`；直接运行
+`run_collector.py` 时仍要显式加 `--proxy-url`。自检：
 
 ```bash
 curl -s --proxy http://172.21.192.1:7890 https://www.okx.com/api/v5/public/time
@@ -617,6 +626,7 @@ PYTHONPATH=src $VENV scripts/run_signal_research.py
 
 # 工作台是前台阻塞进程：单独开一个终端窗口运行，Ctrl+C 结束。
 # 它必须在浏览器自检之前启动，且不要在同一个端口重复启动。
+# 补数默认走 http://172.21.192.1:7890，无需 --proxy-url。
 PYTHONPATH=src $VENV scripts/serve_chart.py
 
 # 浏览器端到端（Playwright 环境持久化在 .tools/），需工作台已在 8787 运行

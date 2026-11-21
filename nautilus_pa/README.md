@@ -179,7 +179,9 @@ POST /regression-suites/v1-4-8/run          GET  /regression-runs[/{id}][/assert
   K 线与全部指标。已追平直接返回 `up-to-date`，不启动子进程；并发调用返回
   `SYNC_BUSY`（409）。
 
-工作台自身不访问交易所，补数一律交给采集器子进程；因此补数需要 `--proxy-url`。
+工作台自身不访问交易所，补数一律交给采集器子进程。子进程默认带上
+`--proxy-url http://172.21.192.1:7890`（WSL 访问 OKX 的 Windows 侧代理），
+无需手动传参；需要换代理或直连时用 `--proxy-url <URL>` / `--proxy-url ""` 覆盖。
 
 页面顶栏的实时徽章：绿=已追平，黄=数据落后（点击即补齐），红=轮询失败。
 `Shift+点击` 或右键暂停/恢复轮询。

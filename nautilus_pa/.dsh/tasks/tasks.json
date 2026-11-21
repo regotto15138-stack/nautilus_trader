@@ -2,7 +2,7 @@
   "schema_version": 1,
   "project": "nautilus_pa",
   "description": "nautilus_pa 的唯一任务状态来源。字段语义见 .dsh/tasks/README.md。",
-  "updated_at": "2026-11-17",
+  "updated_at": "2026-11-21",
   "state_machine": [
     "DRAFT",
     "READY",
@@ -139,6 +139,297 @@
         "artifacts": []
       },
       "notes": "来自执行计划 B00 的已记录缺口；尚未通过拆分门槛，DRAFT 待 Architect 补全后进 READY。"
+    },
+    {
+      "id": "TASK-003",
+      "title": "SACW 数据补齐默认使用 OKX 代理",
+      "requirement_refs": [
+        "REQ-007"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P1",
+      "complexity": "S",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-17",
+      "updated_at": "2026-11-17",
+      "depends_on": [],
+      "objective": "让 scripts/serve_chart.py 在未显式传 --proxy-url 时默认使用 http://172.21.192.1:7890 作为补齐代理并传给采集器，修复页面点击数据补齐报 readiness timeout 的缺陷；同步更新 README/USAGE 说明。",
+      "context_files": [
+        "scripts/serve_chart.py",
+        "tests/unit/test_serve_chart.py",
+        "README.md",
+        "USAGE.md",
+        "tests/unit/test_market_sync.py"
+      ],
+      "allowed_paths": [
+        "scripts/serve_chart.py",
+        "tests/unit/test_serve_chart.py",
+        "README.md",
+        "USAGE.md",
+        "tests/unit/test_market_sync.py"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "web/",
+        "configs/",
+        "catalog/",
+        ".dsh/tasks/"
+      ],
+      "acceptance": [
+        "未传 --proxy-url 时 serve_chart 默认代理为 http://172.21.192.1:7890",
+        "默认代理会出现在采集器子进程命令的 --proxy-url 参数中",
+        "--proxy-url 显式覆盖生效，传空字符串可关闭代理",
+        "启动输出打印实际使用的补齐代理",
+        "README.md 与 USAGE.md 说明默认代理、覆盖与关闭方式",
+        "相关单测通过"
+      ],
+      "test_plan": [
+        "PYTHONPATH=src ../python/.venv/bin/python -m pytest tests/unit/test_serve_chart.py tests/unit/test_market_sync.py -q"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "拆分门槛通过：REQ-007，目标/范围/验收/测试计划已填",
+          "开工：默认代理改动与文档同步",
+          "默认代理改动：DEFAULT_PROXY_URL + build_parser 默认值 + 启动打印 + README/USAGE 同步",
+          "自查：serve_chart.py 仅参数默认值与启动打印变化，未动服务逻辑；test_market_sync.py 只新增一个用例",
+          "启动日志捕获 补齐代理: http://172.21.192.1:7890",
+          "验收 6：单测 28 passed，全量 377 passed",
+          "单测：PYTHONPATH=src ../python/.venv/bin/python -m pytest tests/unit/test_serve_chart.py tests/unit/test_market_sync.py -q -> 28 passed in 1.15s",
+          "静态检查：ruff check scripts/serve_chart.py tests/unit/test_serve_chart.py tests/unit/test_market_sync.py -> All checks passed",
+          "全量测试：PYTHONPATH=src ../python/.venv/bin/python -m pytest -q -> 377 passed in 34.85s",
+          "端到端：未传 --proxy-url 启动 serve_chart.py --port 8790 --store /tmp/sacw_verify.sqlite3，POST /api/v1/market/sync 返回 200，freshness stale=False worst=0，15M 8750->8751（末根 15:00）、3M 14952->14954（末根 15:12）",
+          "启动日志：serve_chart.py --port 8791 输出「补齐代理: http://172.21.192.1:7890」",
+          "收尾：验证产生的新 parquet 已删除，var/sacw.sqlite3 已还原到 HEAD，工作树仅保留代码/测试/文档/tasks.json 改动"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "根因：工作台未传 --proxy-url，采集器直连 OKX 失败，节点等待引擎连接 60s 后报 readiness timeout；错误只取 stderr 最后一行，掩盖真实原因。用户明确要求默认走该代理地址。 test_plan 已涵盖 tests/unit/test_market_sync.py，故将该文件补入 allowed_paths。"
+    },
+    {
+      "id": "TASK-004",
+      "title": "修复 ZigZag 摆动点 occurred_at 晚一根 Bar 的图表偏移",
+      "requirement_refs": [
+        "REQ-007"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P1",
+      "complexity": "S",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-18",
+      "updated_at": "2026-11-18",
+      "depends_on": [],
+      "objective": "ZigZag 检测器把 SwingPoint / 候选点的 occurred_at 写成来源 Bar 的 ts_close_ns，导致七周期的摆动点标记、ZigZag 折线、N 结构锚点与 Zone 锚点在图上整体落到下一根 Bar（1M 案例：LOW 1004.23 落到 2022-07-31 而非其来源 Bar 的蜡烛时间 2022-06-30T16:00Z）。按规格 §4.2/§4.3 与 SACW §17.1 的 occurred_at/confirmed_at 分离要求，改为 occurred_at 取来源 Bar 的 open_time，confirmed_at 仍取确认 Bar 的 close_time。",
+      "context_files": [
+        "src/pa_trend/domain/zigzag/detector.py",
+        "src/pa_trend/domain/models/swing.py",
+        "src/pa_trend/presentation/chart_data.py",
+        "tests/unit/test_zigzag.py",
+        "tests/unit/test_chart_data.py",
+        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "SACW V1.1.2 结构人工标注与参数自动校准工作台规格.md"
+      ],
+      "allowed_paths": [
+        "src/pa_trend/domain/zigzag/detector.py",
+        "src/pa_trend/domain/models/swing.py",
+        "tests/unit/test_zigzag.py",
+        "tests/unit/test_chart_data.py"
+      ],
+      "forbidden_paths": [
+        "configs/",
+        "catalog/",
+        "web/",
+        "scripts/"
+      ],
+      "acceptance": [
+        "detector 冻结的候选 occurred_at = 来源 Bar 的 ts_open_ns，confirmed_at 仍为确认 Bar 的 ts_close_ns，confirmed>=occurred 恒成立",
+        "1M 实测 HIGH 3895 occurred=2021-12-31T16:00Z、LOW 1004.23 occurred=2022-06-30T16:00Z，且 LOW 的 occurred 时间等于载荷中 Low=1004.23 的蜡烛 time",
+        "图表载荷中 swingMarkers、ZigZag 折线、N 结构锚点、Zone 锚点的 time 均落在蜡烛 time 集合内，不再指向下一根 Bar",
+        "更新 test_zigzag 同 Bar 候选断言并新增 occurred 取来源 Bar 开盘的回归测试，全量 pytest 通过",
+        "确认 §4.2 反转判定逻辑未改动：1M 摆动低点仍为 1004.23（878.73 位于确认 Bar，按规格第 202 行不能成为候选）"
+      ],
+      "test_plan": [
+        "PYTHONPATH=src ../python/.venv/bin/python -m pytest tests/unit/test_zigzag.py tests/unit/test_chart_data.py -q",
+        "PYTHONPATH=src ../python/.venv/bin/python -m pytest -q",
+        "python .dsh/scripts/validate_tasks.py"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "契约已完成：目标/范围/验收/测试计划已填；等待开工",
+          "开工：修正 detector occurred_at 口径并补测试",
+          "代码完成：detector._set_candidate 的 occurred 由 bar.ts_close_ns 改为 bar.ts_open_ns；swing.py/detector.py 的 occurred_at 文档口径同步；test_zigzag 修正同 Bar 断言并新增来源 Bar 断言；test_chart_data 新增来源 Bar 对齐回归测试",
+          "自查 diff：行为变更仅 detector.py 一行 + 2 处 docstring + 2 个测试文件；未改 §4.2 反转判定、未改载荷字段与 API 结构",
+          "验证：tests/unit/test_zigzag.py+test_chart_data.py 29 passed；全量 pytest 379 passed；ruff check/format 通过；反向验证临时回退为 close 时 3 个新/改测试全部失败",
+          "验收通过：7 周期载荷中摆动点/候选点时间均落到来源 Bar 蜡烛；1M HIGH 3895 occurred=2021-12-31T16:00Z、LOW 1004.23 occurred=2022-06-30T16:00Z；878.73 位于确认 Bar，按规格 §4.2 第 202 行不能成为候选，是否改规格待用户决定",
+          "用户决定（保持规格 A）：§4.2 与 V1.4.8 不改，LOW 1004.23 为规格结果，878.73 不追溯；本次仅修 occurred_at=<来源Bar open_time>，无进一步代码变更。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "根因：detector.py:_set_candidate 使用 bar.ts_close_ns；chart_data.bar_to_candle 使用 bar.ts_open_ns，二者相差一根 Bar。用户报告的 878.73/1004.23 数值差异是规格 §4.2 第 202 行『确认 Bar 不初始化下一候选』的既定结果，本次不改策略定义，只在交付说明中标注。"
+    },
+    {
+      "id": "TASK-005",
+      "title": "按章节拆分 V1.4.8 策略规格需求文档",
+      "requirement_refs": [
+        "REQ-008"
+      ],
+      "status": "IMPLEMENTED",
+      "priority": "P2",
+      "complexity": "M",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-21",
+      "updated_at": "2026-11-21",
+      "depends_on": [],
+      "objective": "将 ETH-USDT-SWAP 多周期趋势策略开发规格 V1.4.8 的 25 个一级章节逐章拆分为独立 Markdown 需求文档，保留正文层级与原文内容，并提供索引。",
+      "context_files": [
+        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/REQUIREMENTS.md"
+      ],
+      "allowed_paths": [
+        "requirements/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/"
+      ],
+      "acceptance": [
+        "创建 25 个按原一级章节拆分的 Markdown 文档，章节正文完整且顺序不变",
+        "创建 README.md 索引，列出 25 章的编号、标题与对应文件链接",
+        "所有拆分文件标明来源规格版本 V1.4.8 和原章节编号"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "拆分门槛通过：REQ-008；目标为 25 个一级章节拆分；输入为冻结规格原文，输出为 requirements/spec_v1_4_8/ 下章节 MD 与索引；验收和校验命令已明确；纯文档任务无代码依赖，失败模式为漏章或内容改写，按源文件逐章核对回滚即可。",
+          "已登记完整范围与验收；开始章节拆分。",
+          "任务 owner 登记为 lead；拆分进行中。",
+          "拆分脚本生成 25 个章节 MD 和 README；逐章比对剥离文件头后的正文与源规格完全一致；python3 .dsh/scripts/validate_tasks.py 通过；git diff --check 通过。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "纯文档拆分，不改策略语义；源规格保留不动。"
+    },
+    {
+      "id": "TASK-006",
+      "title": "重构 V1.4.8 为唯一权威结构化规格",
+      "requirement_refs": [
+        "REQ-009"
+      ],
+      "status": "IMPLEMENTED",
+      "priority": "P1",
+      "complexity": "L",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-21",
+      "updated_at": "2026-11-21",
+      "depends_on": [],
+      "objective": "将 V1.4.8 25 章副本重构为结构化扩充规格，落实用户确认的 A–E 决策，标记用户待决项，原规格归档并在章节间增加交叉引用。",
+      "context_files": [
+        "requirements/spec_v1_4_8/",
+        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/REQUIREMENTS.md"
+      ],
+      "allowed_paths": [
+        "requirements/spec_v1_4_8/",
+        "requirements/archive/",
+        "requirements/REQUIREMENTS.md",
+        ".dsh/scripts/",
+        ".dsh/tasks/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/"
+      ],
+      "acceptance": [
+        "索引明确结构化 spec 为唯一权威来源，旧原规格标记为归档迁移来源",
+        "25 个章节均采用结构化栏目并使用 SPEC-V148-XX 文档 ID，按需要链接相关章节",
+        "用户已确认的 4、5、6、7、8、9、10、11、12、13、14、16、18、20 项决定完整落文",
+        "用户明确要求待确认的 15、17、19 项作为 OPEN_DECISION 保留，不代替用户拍板",
+        "完成可重复的完整性、章节 ID、相对链接目标及任务台账校验"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "拆分门槛通过：REQ-009 已登记；输入为 25 章分册及原规格，输出为结构化唯一权威 spec、归档原规格和开放决策登记；验收及相对链接校验已定义；不改交易代码，未决 Live 订单策略、合约产品范围、异常重试人工接管规则继续标记 OPEN_DECISION。",
+          "已依据用户确认的 A–E 决策开工，按原始源章节逐项迁移并生成章节交叉引用。",
+          "完成 25 章结构化重构，全部使用 SPEC-V148-NN；章节相对链接与必备结构栏目检查通过；归档原文 SHA-256 与迁移前原文一致；旧文件改为迁移提示；OPEN_DECISIONS 与第 24 章状态表已建立；完整链接/归档检查通过，validate_tasks.py 与 git diff --check 通过。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "用户确认时间 2026-11-21；仅整理规格文档，不修改策略实现。"
+    },
+    {
+      "id": "TASK-007",
+      "title": "将旧 V1.4.8 规格标记为归档迁移来源",
+      "requirement_refs": [
+        "REQ-009"
+      ],
+      "status": "IMPLEMENTED",
+      "priority": "P1",
+      "complexity": "S",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-21",
+      "updated_at": "2026-11-21",
+      "depends_on": [],
+      "objective": "在确认完整归档副本后，将原规格路径改为明确的非权威迁移说明，避免被继续误认为当前唯一权威 spec。",
+      "context_files": [
+        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/archive/ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/spec_v1_4_8/README.md"
+      ],
+      "allowed_paths": [
+        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/archive/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/"
+      ],
+      "acceptance": [
+        "完整原文已存在 requirements/archive 下且与原源文一致",
+        "旧路径明确标记为归档迁移来源并链接唯一权威结构化 spec",
+        "校验归档哈希与唯一权威索引链接"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "REQ-009 范围包含归档策略；已有归档副本；验证以 SHA256 对照后将旧文件改为指向权威 spec 的迁移说明。",
+          "开始完成旧原规格权威地位降级处理。",
+          "原始规格复制到 requirements/archive 后逐字节 SHA-256 一致（校验值登记于原路径迁移提示）；旧路径现为非权威迁移说明并指向唯一权威结构化 spec。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "只在原文已归档验证后替换旧路径为迁移提示，保留历史全文于 archive。"
     }
   ]
 }

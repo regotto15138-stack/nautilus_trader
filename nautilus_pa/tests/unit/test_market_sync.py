@@ -307,6 +307,22 @@ def test_sync_runs_collector_when_stale(tmp_path: Path, monkeypatch: pytest.Monk
     assert result.partial
 
 
+def test_collector_command_carries_proxy(tmp_path: Path) -> None:
+    """配了代理就必须出现在采集器命令行里，未配置则不带该参数。"""
+    proxied = MarketSyncService(
+        catalog_dir=tmp_path,
+        configs_dir=CONFIGS_DIR,
+        instrument_id=INSTRUMENT_ID,
+        session_offset_hours=8,
+        proxy_url="http://172.21.192.1:7890",
+    )
+    command = proxied._collector_command()
+    assert command[command.index("--proxy-url") + 1] == "http://172.21.192.1:7890"
+
+    direct = _make_service(tmp_path)
+    assert "--proxy-url" not in direct._collector_command()
+
+
 def test_sync_reports_collector_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """采集器非零退出要变成 failed，且带上原因。"""
     catalog_path = tmp_path / "catalog"

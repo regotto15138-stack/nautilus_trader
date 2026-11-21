@@ -7,6 +7,9 @@
 - ``--catalog PATH``：读取采集器产出的 Parquet 数据目录（默认 ``nautilus_pa/catalog``）；
 - ``--demo``：生成确定性的合成序列。
 
+数据补齐默认经 Windows 侧代理 http://172.21.192.1:7890 访问 OKX（WSL 直连通常
+不通）；用 `--proxy-url` 覆盖，传空字符串表示不走代理。
+
 示例
 ----
 python scripts/serve_chart.py --port 8787
@@ -38,6 +41,10 @@ DEFAULT_CONFIGS = paths.DEFAULT_CONFIGS_DIR
 DEFAULT_CATALOG = paths.DEFAULT_CATALOG_DIR
 DEFAULT_STORE = paths.PROJECT_ROOT / "var" / "sacw.sqlite3"
 DEFAULT_INSTRUMENT = "ETH-USDT-SWAP.OKX"
+
+#: 按需补齐默认使用的 OKX 代理（WSL 内直连通常不通，走 Windows 侧 Clash 等代理）。
+#: 可用 --proxy-url 覆盖；传空字符串表示直连。
+DEFAULT_PROXY_URL = "http://172.21.192.1:7890"
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -291,8 +298,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--proxy-url",
-        default=None,
-        help="按需补齐时传给采集器的 OKX 代理；缺省沿用环境变量或直连",
+        default=DEFAULT_PROXY_URL,
+        help=(
+            f"按需补齐时传给采集器的 OKX 代理（默认 {DEFAULT_PROXY_URL}）；"
+            "传空字符串表示直连"
+        ),
     )
     parser.add_argument(
         "--sync-timeout-secs",
@@ -457,6 +467,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"标注项目: {project['name']} ({project['project_id']})")
     print(f"数据库: {args.store}")
     print(f"会话偏移: UTC+{service.session_offset_hours}")
+    if sync is not None:
+        print(f"补齐代理: {args.proxy_url or '不使用代理（直连）'}")
     print("按 Ctrl+C 停止")
 
     try:

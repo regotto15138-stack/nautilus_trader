@@ -42,3 +42,33 @@ def test_security_headers_cover_script_and_framing() -> None:
     assert "script-src 'self'" in headers["Content-Security-Policy"]
     assert headers["X-Frame-Options"] == "DENY"
     assert headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_parser_defaults_to_okx_proxy() -> None:
+    """不传 --proxy-url 时补齐默认走 WSL 宿主机代理。"""
+    args = serve_chart.build_parser().parse_args([])
+    assert args.proxy_url == serve_chart.DEFAULT_PROXY_URL
+    assert args.proxy_url == "http://172.21.192.1:7890"
+
+
+def test_proxy_can_be_overridden_or_disabled() -> None:
+    """显式代理覆盖默认值；空字符串表示直连。"""
+    overridden = serve_chart.build_parser().parse_args(
+        ["--proxy-url", "http://127.0.0.1:7891"]
+    )
+    assert overridden.proxy_url == "http://127.0.0.1:7891"
+
+    disabled = serve_chart.build_parser().parse_args(["--proxy-url", ""])
+    assert disabled.proxy_url == ""
+
+
+def test_default_proxy_is_passed_to_sync_service(tmp_path: Path) -> None:
+    """默认代理要进入按需补齐服务，而不是停在参数层。"""
+    args = serve_chart.build_parser().parse_args(["--catalog", str(tmp_path)])
+
+    class _Service:
+        session_offset_hours = 8
+
+    sync = serve_chart._build_sync_service(args, tmp_path, _Service())
+    assert sync is not None
+    assert sync.proxy_url == serve_chart.DEFAULT_PROXY_URL

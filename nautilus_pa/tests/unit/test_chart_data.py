@@ -216,6 +216,32 @@ def test_zigzag_points_use_occurred_time() -> None:
     assert points[0]["time"] == ns_to_chart_time(swings[0].occurred_at_ns)
 
 
+def test_swing_and_candidate_times_match_their_source_bar_candles() -> None:
+    """回归：摆动点/候选点时间必须等于来源 Bar 的蜡烛时间。
+
+    真实缺陷：occurred_at 取来源 Bar 的收盘时刻，而蜡烛按开盘时刻绘制，
+    导致每个标记整体落到下一根 Bar（1M 案例：2022-06 Bar 的 Low=1004.23
+    被画到 2022-07-31 的蜡烛上）。
+    """
+    payload, context = _build()
+    for code, section in payload["series"].items():
+        candles = section["candles"]
+        if not candles:
+            continue
+        time_by_bar_id = {candle["barId"]: candle["time"] for candle in candles}
+        for swing in context.engine(Timeframe(code)).swings:
+            expected = time_by_bar_id.get(swing.source_bar_id)
+            if expected is None:
+                continue
+            assert ns_to_chart_time(swing.occurred_at_ns) == expected, (
+                f"{code} swing {swing.point_id} is one bar late"
+            )
+        for marker in section["candidateMarkers"]:
+            expected = time_by_bar_id.get(marker["barId"])
+            if expected is not None:
+                assert marker["time"] == expected, f"{code} candidate marker is one bar late"
+
+
 def test_overlays_are_limited_to_the_served_window() -> None:
     """叠加层必须与下发的 K 线范围相交。
 

@@ -20,7 +20,7 @@ def _detector(**kwargs: object) -> ZigZagDetector:
     )
 
 
-def _three_bars_confirming_a_high() -> tuple[ZigZagDetector, list[object]]:
+def _three_bars_confirming_a_high() -> tuple[ZigZagDetector, list[object], list[object]]:
     detector = _detector()
     bars = [
         make_bar(index=0, open_price=99, high=100, low=98, close=100),
@@ -28,11 +28,11 @@ def _three_bars_confirming_a_high() -> tuple[ZigZagDetector, list[object]]:
         make_bar(index=2, open_price=118, high=125, low=100, close=101),
     ]
     results = [detector.update(bar, ATR) for bar in bars]
-    return detector, results
+    return detector, results, bars
 
 
 def test_swing_high_confirms_on_the_reversal_bar() -> None:
-    detector, results = _three_bars_confirming_a_high()
+    detector, results, _ = _three_bars_confirming_a_high()
     assert results[0] is None
     assert results[1] is None
     swing = results[2]
@@ -45,11 +45,14 @@ def test_swing_high_confirms_on_the_reversal_bar() -> None:
 
 
 def test_candidate_and_confirmation_can_share_one_bar() -> None:
-    _, results = _three_bars_confirming_a_high()
+    _, results, bars = _three_bars_confirming_a_high()
     swing = results[2]
     assert swing is not None
-    # 候选高点与确认发生在同一根 K 线上。
-    assert swing.occurred_at_ns == swing.confirmed_at_ns
+    # 候选高点与确认发生在同一根 K 线上；occurred 取该 Bar 的 open_time，
+    # confirmed 取该 Bar 的 close_time，二者不再相等。
+    assert swing.occurred_at_ns == bars[2].ts_open_ns
+    assert swing.confirmed_at_ns == bars[2].ts_close_ns
+    assert swing.occurred_at_ns < swing.confirmed_at_ns
 
 
 def test_confirmed_at_never_precedes_occurred_at() -> None:
@@ -62,6 +65,27 @@ def test_confirmed_at_never_precedes_occurred_at() -> None:
     )
     assert swing is not None
     assert swing.confirmed_at_ns > swing.occurred_at_ns
+
+
+def test_occurred_at_is_the_source_bar_open_not_close() -> None:
+    """摆动点 occurred_at 必须等于来源 Bar 的开盘时刻。
+
+    真实缺陷：occurred_at 取来源 Bar 的收盘时刻，而图表蜡烛按开盘时刻绘制，
+    导致摆动点标记整体后移一根 Bar（1M 上表现为跨月）。
+    """
+    detector = _detector()
+    detector.update(make_bar(index=0, open_price=100, high=100, low=99, close=100), ATR)
+    source = make_bar(index=1, open_price=100, high=110, low=99, close=108)
+    detector.update(source, ATR)
+    swing = detector.update(
+        make_bar(index=2, open_price=108, high=109, low=85, close=86),
+        ATR,
+    )
+    assert swing is not None
+    assert swing.price == dec(110)
+    assert swing.occurred_at_ns == source.ts_open_ns
+    assert swing.source_bar_id == source.bar_id
+    assert swing.confirmed_at_ns == make_bar(index=2).ts_close_ns
 
 
 def test_candidate_atr_is_frozen_when_the_extreme_forms() -> None:
@@ -106,7 +130,7 @@ def test_swing_low_confirms_when_seeking_low_initially() -> None:
 
 
 def test_confirmation_bar_does_not_seed_the_next_candidate() -> None:
-    detector, results = _three_bars_confirming_a_high()
+    detector, results, _ = _three_bars_confirming_a_high()
     assert results[2] is not None
     # 确认 K 线的最低价是 100，但该低点不得成为下一方向的候选。
     assert (

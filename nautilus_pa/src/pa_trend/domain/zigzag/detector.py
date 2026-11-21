@@ -39,7 +39,7 @@ class ZigZagCandidateView:
     atr_snapshot : Decimal
         候选极值形成时冻结的 ATR。
     occurred_at_ns : int
-        候选极值所在 Bar 的完成时刻。
+        候选极值所在 Bar 的 open_time，与蜡烛图时间键一致。
     bar_id : str
         候选极值来源 Bar 的稳定 ID。
     reversal_threshold_price : Decimal
@@ -313,10 +313,16 @@ class ZigZagDetector:
         return point
 
     def _set_candidate(self, bar: Bar, atr_value: Decimal, price: Decimal) -> None:
-        """冻结候选极值及其 ATR（规格第 4.2 节第 3 步）。"""
+        """冻结候选极值及其 ATR（规格第 4.2 节第 3 步）。
+
+        ``occurred_at`` 取来源 Bar 的 open_time：蜡烛图、人工标注与结构锚点
+        都以该时刻作为时间键；原始 OHLC 无法还原 Bar 内极值的精确时刻，若取
+        close_time 会让标记整体后移一根 Bar（规格第 4.3 节仅要求
+        ``confirmed_at >= occurred_at``）。
+        """
         self._candidate_price = price
         self._candidate_atr = atr_value
-        self._candidate_occurred_ns = bar.ts_close_ns
+        self._candidate_occurred_ns = bar.ts_open_ns
         self._candidate_bar_id = bar.bar_id
 
     def _confirm(self, bar: Bar, direction: SwingDirection) -> SwingPoint:

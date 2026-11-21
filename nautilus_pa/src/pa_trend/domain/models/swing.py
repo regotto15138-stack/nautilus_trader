@@ -39,7 +39,9 @@ class SwingPoint:
     price : Decimal
         极值价格。
     occurred_at_ns : int
-        极值实际形成的时刻，UNIX 纪元以来的纳秒数。
+        极值所在来源 Bar 的 open_time，UNIX 纪元以来的纳秒数。原始 OHLC
+        无法还原 Bar 内极值的精确时刻，因此采用该 Bar 的图表时间键，与蜡烛、
+        ``source_bar_id`` 及人工标注保持一致。
     confirmed_at_ns : int
         反转被确认的时刻，UNIX 纪元以来的纳秒数。
     atr_snapshot : Decimal
@@ -76,7 +78,7 @@ class SwingPoint:
 
     @property
     def occurred_at(self) -> datetime:
-        """把极值时刻返回为带时区的 UTC datetime。"""
+        """把极值所在 Bar 的开盘时刻返回为带时区的 UTC datetime。"""
         return ns_to_dt(self.occurred_at_ns)
 
     @property
