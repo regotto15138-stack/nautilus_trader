@@ -194,7 +194,7 @@ RESISTANCE：
 
 ### 3.2 已确认补充要求
 
-- **SPEC-V148-06-ADD-01：** 每次 Zone 决策使用触发该决策的已完成 Bar ATR，并将值与 source_bar_id 记入不可变 Zone 版本快照；这不是固定 Zone 创建 ATR。内部价格/边界保留精确值，不隐式 tick 舍入；价格距离/边界比较不使用任意 epsilon；仅订单价格按交易所 tick 规则量化。
+- **SPEC-V148-06-ADD-01：** 每次 Zone 决策使用触发该决策的已完成 Bar ATR，并将值与 source_bar_id 记入不可变 Zone 版本快照；这不是固定 Zone 创建 ATR。内部价格/边界保留精确值，不隐式 tick 舍入；仅订单价格按交易所 tick 规则量化。
 
 ## 4. 数据与状态契约
 

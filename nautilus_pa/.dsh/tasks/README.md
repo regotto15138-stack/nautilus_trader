@@ -60,7 +60,13 @@ CANCELLED（明确终止）。
     python .dsh/scripts/taskctl.py dispatch TASK-002 --role developer
     python .dsh/scripts/validate_tasks.py      # 校验 schema、DAG、状态与路径
 
-## 6. 提交规则
+## 6. 新项目复用与 Session 启动
+
+新项目协作规范模板位于 `requirements/templates/ai-project-bootstrap/`。复制前按目标仓库约束、代码栈、风险及 Git 拓扑裁剪；不可复制本项目的交易规则、硬编码路径或独立提交约定。
+
+每次 Session 开始按 `AGENTS.md` 固定协议：读项目规范/状态 → 核唯一任务台账及当前 TASK → 读契约与必要上下文 → 核 Git 状态/最近提交 → 核未完成交接 → 确认任务处于可开工状态。历史对话与 handoff 仅是线索，实际任务状态与工作区文件优先。
+
+## 7. 提交规则
 
 `nautilus_pa/` 没有独立 git，改动随父仓库 `/home/regotto/Code/nautilus_trader` 提交，
 路径在提交里表现为 `nautilus_pa/` 前缀；子工程只负责任务发布，不建任务分支/worktree（D-007）。

@@ -13,7 +13,7 @@
 | 交换/合约 | OKX `ETH-USDT-SWAP`，tick_size 见 `configs/market_okx_eth_swap.yaml` |
 | 周期 | 1MONTH、1W、1D、4H、1H、15M、3M |
 
-## 2. 当前状态（2026-11-17）
+## 2. 当前状态（2026-11-23）
 
 - 测试基线：349 passed（`PYTHONPATH=src python -m pytest -q`）。
 - 已实现：P0-A～P0-D——七周期时间与 Bar 处理、SMA22/ATR14、ZigZag、SwingPoint、
@@ -93,6 +93,8 @@ SwingPoint、ProtectedLow/High、PullbackOriginHigh、N 结构、Zone）。
 
 - 2026-11-17：建立 DSH 协作规范（`.dsh/`、三 preset、tasks.json、提交门禁）。
 - 2026-11-17：校正 Git 定位——子工程随父仓库提交、只负责任务发布，取消分支/worktree 要求（D-007）。
+- 2026-11-23：归档 DSH 大型项目开发操作标准；AGENTS.md 含每次 Session 启动协议，新项目通用模板位于 `requirements/templates/ai-project-bootstrap/`。
+- 2026-11-23：工程文档以 README 导航；当前执行计划归位 `planning/EXECUTION_PLAN.md`；V1.4.8、SACW、DSH 旧根入口清理，正文统一到 requirements 的权威/归档目录。
 
 ## 10. 信息可信度
 

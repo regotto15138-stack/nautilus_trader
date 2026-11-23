@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parents[2]
-SOURCE = PROJECT / "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md"
+SOURCE = PROJECT / "requirements" / "archive" / "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md"
 OUTPUT = PROJECT / "requirements" / "spec_v1_4_8"
 
 
@@ -34,7 +34,7 @@ def main() -> None:
     index = [
         "# ETH-USDT-SWAP 多周期趋势策略 V1.4.8 需求文档",
         "",
-        "> 来源：`../../ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md`。以下文件按原文一级章节拆分，正文原样保留；章节编号、子标题和规则均沿用冻结规格，不构成策略定义变更。",
+        "> 来源：`../archive/ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md`。以下文件按原文一级章节拆分，正文原样保留；章节编号、子标题和规则均沿用冻结规格，不构成策略定义变更。",
         "",
         "| 章节 | 标题 | 文档 |",
         "|---:|---|---|",
@@ -49,7 +49,7 @@ def main() -> None:
         )
         (OUTPUT / filename).write_text(header + chapter_text, encoding="utf-8")
         index.append(f"| {number} | {title} | [{filename}](./{filename}) |")
-    index.extend(["", "## 使用说明", "", "- 本目录中的 25 份文档与源规格第 1–25 章一一对应。", "- 文档仅按一级章节拆分，原文内部层级、表格、代码块、公式及措辞不作改写。", "- 策略语义的权威基线仍为 V1.4.8 原规格；本目录是便于查阅和需求追踪的分章副本。", ""])
+    index.extend(["", "## 使用说明", "", "- 本目录中的 25 份文档与 requirements/archive 中归档规格第 1–25 章一一对应。", "- 文档仅按一级章节拆分，原文内部层级、表格、代码块、公式及措辞不作改写。", "- 本目录为便于查阅和需求追踪的分章副本；策略语义的唯一权威来源见 requirements/spec_v1_4_8/。", ""])
     (OUTPUT / "README.md").write_text("\n".join(index), encoding="utf-8")
     print(f"created {len(chapters)} chapter documents and README in {OUTPUT.relative_to(PROJECT)}")
 

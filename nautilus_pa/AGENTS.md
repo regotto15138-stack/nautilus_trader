@@ -110,7 +110,23 @@ Session 结束前更新 `.dsh/sessions/SESSION_HANDOFF.md` 的 14 节；新 Sess
 | 上下文隔离 | 每个角色独立 preset/会话，子 Agent 只见契约与 `context_files` |
 | 可恢复 | `tasks.json` + `SESSION_HANDOFF.md` + Git 历史 |
 
-## 10. 沟通
+## 10. 每次 AI Session 启动与项目级协作范式
+
+项目启动/每次新 Session 必须遵循此顺序，不能以历史聊天摘要替代文件事实：
+
+1. 读取本文件、`PROJECT_CONTEXT.md`，确认上游仓库 `AGENTS.md`、`AI_POLICY.md`、`CONTRIBUTING.md` 的约束仍生效。
+2. 读取 `.dsh/tasks/tasks.json` 和 `.dsh/tasks/README.md`，确认当前 TASK、状态、owner、依赖、允许/禁止路径；未登记任务先登记 REQ/TASK，不进行正式修改。
+3. 读取当前任务契约与其 `context_files`；只按 L0（项目约束/状态）→L1（模块接口）→L2（任务文件/相关源码）→L3（执行输出/Diff）加载，不扫描无关目录。
+4. 核对父仓库 `git status --short`、`git log -3 --oneline`，并阅读未完成的 `SESSION_HANDOFF.md`（若存在）；不得覆盖、清理或归因不明的用户改动。
+5. 只有任务通过六项拆分门槛并进入 `READY` 后才可开始；开工改为 `IN_PROGRESS`、登记 owner 和证据。实现后依次审查、测试、最终验收；不可把未运行测试说成通过。
+
+通用协作规则：Main 管全局状态、拆任务、范围和最终验收；Architect/Reviewer 默认只读；Developer 只在 `allowed_paths` 内修改；单文件单写者，路径重叠任务串行。子 Agent 仅接收目标、输入、接口、依赖、范围、验收、验证与预算等最小契约；超界、缺规格、接口冲突时先停并申请澄清。对话/模型记忆为临时载体，只有通过验证并记录到权威项目文件的状态才可跨 Session 依赖。
+
+预算和交接：按 `.dsh/config/token_budget.md` 的实际可用预算执行（60%停止探索、80%收敛、95%保存状态并交接）；这些阈值是管理策略，不得伪装为 DSH 硬限制。达到交接条件时检查任务/成员状态、Git Diff、测试证据，必要时增量更新 `PROJECT_CONTEXT.md` 并填写 `.dsh/sessions/SESSION_HANDOFF.md`；不为交接执行破坏性 Git 操作。
+
+新建项目时先复用 `requirements/templates/ai-project-bootstrap/`，再按项目栈/风险裁剪；不得把 nautilus_pa 的交易域约束、路径、提交规范误植到其他项目。当前执行计划见 `planning/EXECUTION_PLAN.md`；归档来源见 `requirements/archive/DSH 大型项目开发操作标准.md`，与现有规范冲突时依本文件第 0 节优先级处理。
+
+## 11. 沟通
 
 - 面向用户的回复用中文；代码与提交信息按项目既有风格。
 - 不确定就说不确定；阻塞就说阻塞点；不要用"已完成"掩盖未验证。

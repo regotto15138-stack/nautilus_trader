@@ -2,7 +2,7 @@
   "schema_version": 1,
   "project": "nautilus_pa",
   "description": "nautilus_pa 的唯一任务状态来源。字段语义见 .dsh/tasks/README.md。",
-  "updated_at": "2026-11-21",
+  "updated_at": "2026-11-23",
   "state_machine": [
     "DRAFT",
     "READY",
@@ -49,9 +49,9 @@
       "depends_on": [],
       "objective": "在 nautilus_pa/ 建立 .dsh 模板、md 准则、3 个 Agent Preset 与 tasks.json 任务流转规则。",
       "context_files": [
-        "nautilus_pa/DSH 大型项目开发操作标准.md",
+        "nautilus_pa/requirements/archive/DSH 大型项目开发操作标准.md",
         "nautilus_pa/README.md",
-        "nautilus_pa/执行计划.md"
+        "nautilus_pa/planning/EXECUTION_PLAN.md"
       ],
       "allowed_paths": [
         ".dsh/",
@@ -68,7 +68,7 @@
         "configs/",
         "scripts/",
         "USAGE.md",
-        "执行计划.md",
+        "planning/EXECUTION_PLAN.md",
         "catalog/"
       ],
       "acceptance": [
@@ -111,7 +111,7 @@
       "context_files": [
         "src/pa_trend/presentation/api.py",
         "web/app.js",
-        "执行计划.md"
+        "planning/EXECUTION_PLAN.md"
       ],
       "allowed_paths": [
         "src/pa_trend/presentation/",
@@ -230,8 +230,8 @@
         "src/pa_trend/presentation/chart_data.py",
         "tests/unit/test_zigzag.py",
         "tests/unit/test_chart_data.py",
-        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
-        "SACW V1.1.2 结构人工标注与参数自动校准工作台规格.md"
+        "requirements/spec_v1_4_8/README.md",
+        "requirements/sacw_v1_1_2/README.md"
       ],
       "allowed_paths": [
         "src/pa_trend/domain/zigzag/detector.py",
@@ -290,7 +290,7 @@
       "depends_on": [],
       "objective": "将 ETH-USDT-SWAP 多周期趋势策略开发规格 V1.4.8 的 25 个一级章节逐章拆分为独立 Markdown 需求文档，保留正文层级与原文内容，并提供索引。",
       "context_files": [
-        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/spec_v1_4_8/README.md",
         "requirements/REQUIREMENTS.md"
       ],
       "allowed_paths": [
@@ -341,7 +341,7 @@
       "objective": "将 V1.4.8 25 章副本重构为结构化扩充规格，落实用户确认的 A–E 决策，标记用户待决项，原规格归档并在章节间增加交叉引用。",
       "context_files": [
         "requirements/spec_v1_4_8/",
-        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/spec_v1_4_8/README.md",
         "requirements/REQUIREMENTS.md"
       ],
       "allowed_paths": [
@@ -396,12 +396,12 @@
       "depends_on": [],
       "objective": "在确认完整归档副本后，将原规格路径改为明确的非权威迁移说明，避免被继续误认为当前唯一权威 spec。",
       "context_files": [
-        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/spec_v1_4_8/README.md",
         "requirements/archive/ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
         "requirements/spec_v1_4_8/README.md"
       ],
       "allowed_paths": [
-        "ETH-USDT-SWAP 多周期趋势策略开发规格V1.4.8.md",
+        "requirements/spec_v1_4_8/README.md",
         "requirements/archive/"
       ],
       "forbidden_paths": [
@@ -430,6 +430,275 @@
         "artifacts": []
       },
       "notes": "只在原文已归档验证后替换旧路径为迁移提示，保留历史全文于 archive。"
+    },
+    {
+      "id": "TASK-008",
+      "title": "合并 V1.4.8 与 SACW 现状更新执行计划",
+      "requirement_refs": [
+        "REQ-010"
+      ],
+      "status": "IMPLEMENTED",
+      "priority": "P1",
+      "complexity": "M",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-21",
+      "updated_at": "2026-11-21",
+      "depends_on": [],
+      "objective": "扫描并核验 nautilus_pa 当前代码、测试、配置与已有执行计划，将 V1.4.8 扩充结构化规格的阶段顺序、硬性依赖、OPEN_DECISIONS 门禁、tasks.json 工作流及实际完成状态合并写入planning/EXECUTION_PLAN.md，为后续技术方案拆分提供可信基线。",
+      "context_files": [
+        "planning/EXECUTION_PLAN.md",
+        "PROJECT_CONTEXT.md",
+        ".dsh/tasks/tasks.json",
+        "requirements/spec_v1_4_8/README.md",
+        "requirements/spec_v1_4_8/23-开发顺序.md",
+        "requirements/spec_v1_4_8/24-冻结条件.md",
+        "requirements/spec_v1_4_8/OPEN_DECISIONS.md",
+        "requirements/REQUIREMENTS.md",
+        "requirements/ACCEPTANCE.md"
+      ],
+      "allowed_paths": [
+        "planning/EXECUTION_PLAN.md",
+        ".dsh/tasks/tasks.json",
+        "requirements/REQUIREMENTS.md"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/",
+        "catalog/",
+        "var/"
+      ],
+      "acceptance": [
+        "执行计划区分本次已核验实现、部分实现与未实现，旧文档结论标记为待复核而非现状事实",
+        "完整纳入 P0-A 至 P0-F、P1-A 至 P1-D、P2、P3 的顺序和依赖，明确 PB-01 至 PB-51 与 OD-05 对 P1-A 的门禁",
+        "列明 OPEN_DECISIONS 对应能力限制，不擅自决定未决策略语义或 Live 行为",
+        "明确后续工作以 tasks.json 唯一流转、REQ/TASK 追溯及任务出口管理",
+        "执行计划内容为后续技术方案规划基线，未执行或未通过的核验明确标待验证",
+        "python3 .dsh/scripts/validate_tasks.py 通过"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "拆分门槛核对：REQ-010 已登记；目标、唯一写入范围、规格/状态输入、验收和校验命令已定义；风险为旧状态记录需与当前代码核验，禁止代码路径与已有工作区数据均已排除；只改执行计划及任务/REQ 台账。",
+          "主理人按用户直接指令开始审查现有计划与当前实现；先核验代码/测试/配置清单，再更新执行计划。",
+          "核对 PROJECT_CONTEXT、源模块/测试清单、规格 P0/P1/P2/P3 与冻结条件、PB 样本声明及 OPEN_DECISIONS。Python suite: PYTHONPATH=src ../python/.venv/bin/python -m pytest -q -> 379 passed in 41.60s。执行前工作区已有未跟踪行情 parquet/pcap；只读统计当前 SQLite annotations=9、golden_datasets=0、dataset_splits=0、regression_runs=5、regression_assertions=280。",
+          "根据独立只读审阅修订执行计划：将历史批次和里程碑明确标为非当前状态，统一章节编号，按第 24 章逐项列冻结门禁，并保留 P1-A 的 P0-E/OD-05 准入限制。",
+          "验证：python3 .dsh/scripts/validate_tasks.py -> ok: 8 task(s)；git diff --check -- nautilus_pa/planning/EXECUTION_PLAN.md nautilus_pa/requirements/REQUIREMENTS.md nautilus_pa/.dsh/tasks/tasks.json -> 通过；审阅指出的状态冲突、编号及冻结清单可审计性问题已修正。",
+          "TASK-008 转 IN_PROGRESS -> IMPLEMENTED 后再次运行 python3 .dsh/scripts/validate_tasks.py -> ok: 8 task(s)，任务校验和文档 diff check 均成功。",
+          "计划结构复核：13 个一级章节按〇、一至十二连续唯一；README 与 OPEN_DECISIONS 相对目标存在；2026-11-21 快照与逐条历史记录明确分离。",
+          "执行计划V2.0完成；当前实现状态和旧核验区分；加入V1.4.8×SACW双轴依赖、OPEN_DECISIONS约束和第24章逐项冻结清单；独立审阅所指出的问题已修正；REQUIREMENTS/TASK同步更新。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "只更新计划和任务登记；不改策略实现，不自动提交。扫描时保留父仓库已有无关工作区改动。"
+    },
+    {
+      "id": "TASK-009",
+      "title": "SACW 前后端技术方案与接口契约",
+      "requirement_refs": [
+        "REQ-011"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P1",
+      "complexity": "L",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-23",
+      "updated_at": "2026-11-23",
+      "depends_on": [],
+      "objective": "基于 SACW V1.1.2、V1.4.8 结构化需求和当前源码，形成前端方案、后端方案及共同接口契约，拆解归档原 SACW 规格；不修改代码。",
+      "context_files": [
+        "requirements/sacw_v1_1_2/README.md",
+        "requirements/spec_v1_4_8/",
+        "planning/EXECUTION_PLAN.md",
+        "src/pa_trend/",
+        "web/"
+      ],
+      "allowed_paths": [
+        "requirements/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/"
+      ],
+      "acceptance": [
+        "创建前端技术方案 plan.md，含模块职责、核心数据结构、接口调用、实施顺序依赖和风险",
+        "创建后端技术方案 plan.md，含模块职责、核心数据结构、函数签名、实施顺序依赖和风险",
+        "创建一份前后端统一接口契约并由两份 plan 引用",
+        "原 SACW 规格拆解归档，保留可追溯完整来源且明确权威关系",
+        "不改代码；P0-E、OD-05、P1-A 准入门槛与 OPEN_DECISIONS 明确保留"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py",
+        "git diff --check"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "六项拆分门槛完成：关联 REQ-011；目标/输入输出/验收/验证命令齐全；纯文档任务可独立验收；无前置依赖；完整性与链接检查明确；风险为规格遗漏或语义误迁，保留归档原文并可逐章回滚。",
+          "开始只读核对规格、源码与执行计划，之后编制文档；不修改代码。",
+          "前端plan、后端plan、统一接口契约已生成；原规格拆为27份章节档案覆盖34章，逐章与 HEAD 原文切片一致；旧路径改为迁移指针；相对链接检查、tasks校验、git diff --check通过。仅文档修改，无代码变更。",
+          "主理人完成方案内容复核，进入验收校验。",
+          "独立文档校验：原文逐章切片一致；相对链接均存在；REQ-011 标为 DONE；无代码路径变更。",
+          "验收：两份plan及统一接口契约具备要求内容；原规格归档覆盖34章且逐字核对；P0-E/OD-05/P1-A 与未决项保留；python3 validate_tasks.py、相对链接检查和git diff --check通过。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "文档规划任务；需忠实映射现状和规格边界，前后端耦合以契约为准；如拆解方式涉及覆盖原文、改权威版本关系等问题先向用户确认。"
+    },
+    {
+      "id": "TASK-010",
+      "title": "归档DSH标准并建立AI项目启动模板",
+      "requirement_refs": [
+        "REQ-012"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P1",
+      "complexity": "M",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-23",
+      "updated_at": "2026-11-23",
+      "depends_on": [],
+      "objective": "完整归档 DSH 大型项目开发操作标准，将适用规则纳入 nautilus_pa 项目规范，并提供新建工程和每次 AI Session 可复用的启动模板/清单。",
+      "context_files": [
+        "requirements/archive/DSH 大型项目开发操作标准.md",
+        "AGENTS.md",
+        "PROJECT_CONTEXT.md",
+        ".dsh/README.md",
+        ".dsh/config/agent_roles.md",
+        ".dsh/config/token_budget.md",
+        ".dsh/tasks/README.md",
+        ".dsh/sessions/SESSION_HANDOFF.md",
+        "requirements/ACCEPTANCE.md"
+      ],
+      "allowed_paths": [
+        "requirements/archive/",
+        "requirements/archive/DSH 大型项目开发操作标准.md",
+        "AGENTS.md",
+        "PROJECT_CONTEXT.md",
+        ".dsh/README.md",
+        ".dsh/config/agent_roles.md",
+        ".dsh/config/token_budget.md",
+        ".dsh/tasks/README.md",
+        ".dsh/sessions/SESSION_HANDOFF.md",
+        "requirements/ACCEPTANCE.md"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/",
+        "catalog/",
+        "var/"
+      ],
+      "acceptance": [
+        "原始 DSH 标准全文归档并保留哈希或逐字节来源核验，原路径成为明确迁移指针",
+        "AGENTS.md 与 .dsh 文档明确每次 session 的启动/任务门禁、上下文范围、权限、验证和交接规则",
+        "提供可复制的新项目 bootstrap 模板或清单，区分通用规则与 nautilus_pa 特定约束",
+        "项目现有规则与归档规范冲突处显式说明优先级，不引入多源任务状态",
+        "文档链接可解析；validate_tasks.py 和 git diff --check 通过；不改业务代码"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py",
+        "git diff --check"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "拆分门槛：关联 REQ-012；目标、范围、产物、验收及文档校验命令明确；可独立验收；无依赖；失败模式为遗漏/规范冲突，保留原文可恢复；修改范围限定文档与规范。",
+          "开始整理归档、AGENTS.md 规则整合及新工程 bootstrap 模板；严格保留既有 Git 工作区变更。",
+          "归档全文与 Git HEAD 原文件 byte-identical，SHA256=046409836debb4e882bc92af0688bea6f4338f905b6bbf5f7a048d3ab8458c37；旧路径改为指针；AGENTS 扩展每次 Session 启动协议；新增通用 bootstrap 模板/清单；REQ-012 详细范围、ACCEPTANCE、tasks README 与 token budget 同步。",
+          "主理人复核规范优先级、项目专属边界和可复用模板范围。",
+          "进入最终文档校验：任务校验、14份目标文档相对链接检查、归档哈希和 diff check。",
+          "归档字节一致；14份规范/模板文档链接检查通过；validate_tasks.py 与 git diff --check 通过；未改业务代码。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "用户要求把范式落实为项目规范，避免仅归档。仅修改文档与任务登记；保留父仓库现有用户改动与未跟踪数据。"
+    },
+    {
+      "id": "TASK-011",
+      "title": "调整工程文档结构并清理迁移副本",
+      "requirement_refs": [
+        "REQ-013"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P1",
+      "complexity": "M",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-23",
+      "updated_at": "2026-11-23",
+      "depends_on": [],
+      "objective": "按工程文档职责整理 requirements、docs、development 和根目录入口；更新链接与索引；对已迁移并核验完整的根目录旧规格/规范文件执行删除；保留仍为当前状态入口的执行计划及使用文档。",
+      "context_files": [
+        "requirements/REQUIREMENTS.md",
+        "requirements/ACCEPTANCE.md",
+        "AGENTS.md",
+        "PROJECT_CONTEXT.md",
+        ".dsh/tasks/tasks.json",
+        ".dsh/sessions/SESSION_HANDOFF.md"
+      ],
+      "allowed_paths": [
+        "requirements/",
+        "docs/",
+        "development/",
+        "planning/",
+        "AGENTS.md",
+        "PROJECT_CONTEXT.md",
+        "README.md",
+        ".dsh/tasks/",
+        ".dsh/sessions/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/",
+        "scripts/",
+        "catalog/",
+        "var/"
+      ],
+      "acceptance": [
+        "策略规格、SACW规格、DSH归档分别只有一个权威正文，原文完整归档且旧根路径已删除",
+        "当前执行计划放入清晰的 planning 区域，规则/接口/决策等文档按职责归位或保留合理路径",
+        "README及所有引用指向有效新位置，未删除仍被依赖或未迁移的文档",
+        "python3 .dsh/scripts/validate_tasks.py、文档相对链接校验、git diff --check通过"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py",
+        "检查 nautilus_pa Markdown 本地相对链接目标存在",
+        "git diff --check"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "REQ-013 与 TASK-011 已登记；范围限定文档和索引，不涉及业务代码；迁移删除前执行完整性与引用检查。",
+          "六项拆分门槛核对通过，进入文档结构调整与链接迁移。",
+          "旧根目录 V1.4.8、SACW、DSH 文件删除；验证策略规格归档哈希稳定、SACW 34/34 章正文与 Git HEAD 原规格相符、DSH 全文包含在归档中。",
+          "当前计划迁入 planning/EXECUTION_PLAN.md，更新 README 导航、AGENTS/REQUIREMENTS/ACCEPTANCE/permission policy/生成脚本与历史任务路径。",
+          "验证：python3 .dsh/scripts/split_v1_4_8_spec.py、structure_v1_4_8_spec.py 均可从 requirements/archive 源重建章节；validate_tasks.py -> ok: 11 task(s)；Markdown 本地相对链接检查 -> 0 broken links；git diff --check -- nautilus_pa 通过。",
+          "独立验收：生成器从archive运行通过；11 tasks校验通过；Markdown本地链接0 broken；git diff --check通过；未更改代码。"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "纯文档结构调整，删除仅限完整迁移并经引用审查的旧文件；保留工作区现有用户变更。"
     }
   ]
 }

@@ -1,3 +1,23 @@
+# nautilus_pa 工程入口
+
+> 项目介绍与使用入口见下方；权威规格、协作规范、规划文档均通过本索引定位。文件与目录结构持续按职责维护。
+
+## 工程文档导航
+
+| 分类 | 权威入口 |
+|---|---|
+| AI 协作规范与启动门禁 | [AGENTS.md](AGENTS.md)、[DSH 工程规范归档](requirements/archive/DSH%20大型项目开发操作标准.md) |
+| 项目状态快照 | [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) |
+| 需求与验收 | [REQUIREMENTS.md](requirements/REQUIREMENTS.md)、[ACCEPTANCE.md](requirements/ACCEPTANCE.md)、[变更请求登记](requirements/CHANGE_REQUESTS.md) |
+| 策略语义权威规格 | [V1.4.8 结构化规格索引](requirements/spec_v1_4_8/README.md) |
+| SACW 需求及技术方案 | [SACW V1.1.2 拆解索引](requirements/sacw_v1_1_2/README.md)、[前端方案](requirements/sacw_v1_1_2/frontend/plan.md)、[后端方案](requirements/sacw_v1_1_2/backend/plan.md)、[统一接口契约](requirements/sacw_v1_1_2/interface-contract.md) |
+| 执行路线与冻结门禁 | [执行计划](planning/EXECUTION_PLAN.md) |
+| 架构/API/数据模型 | [架构说明](docs/ARCHITECTURE.md)、[API 契约](docs/API_CONTRACTS.md)、[数据模型](docs/DATA_MODEL.md)、[模块目录](docs/MODULES.md) |
+| 工程治理历史 | [development 索引](development/README.md) |
+| 新项目模板 | [AI 项目 Bootstrap](requirements/templates/ai-project-bootstrap/README.md) |
+
+---
+
 # ETH 多周期趋势识别与 SACW 标注工作台（规格 V1.4.8 / SACW V1.1.2）
 
 按 `ETH 永续合约价格行为趋势策略.md`（V1.4.8）与

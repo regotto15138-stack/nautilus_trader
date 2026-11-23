@@ -20,6 +20,8 @@
 | `scripts/check_commit.py` | 提交门禁（Task ID + 范围） |
 | `scripts/install_git_hooks.sh` | 安装/卸载 git hooks |
 | `scripts/install_presets.py` | 合并 preset 到 DSH profile |
+| `../requirements/archive/DSH 大型项目开发操作标准.md` | 原始大型项目协作规范归档（只读来源） |
+| `../requirements/templates/ai-project-bootstrap/` | 新项目 AI 协作模板与启动清单 |
 
 ## 5 分钟上手
 

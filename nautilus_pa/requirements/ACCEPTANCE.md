@@ -64,10 +64,14 @@ P0/P1 一律不得带缺陷验收。
 
 ## 5. 需求级出口条件
 
-阶段出口以 `执行计划.md` 的出口条件为准；阶段出口是下一阶段的准入门槛，不允许"先做后面"。
+阶段出口以 `planning/EXECUTION_PLAN.md` 的出口条件为准；阶段出口是下一阶段的准入门槛，不允许"先做后面"。
 REQ 只有在全部子任务 ACCEPTED 且出口条件满足时才能标 `DONE`。
 
-## 6. 证据写法
+## 6. AI 协作规范与项目启动
+
+每次 AI Session 开始须遵循项目 `AGENTS.md` 启动协议，核实唯一任务状态源、任务范围、Git 工作区和交接文件；上下文按需分层读取。新项目不得直接复制业务专属规则，须基于 `requirements/templates/ai-project-bootstrap/` 裁剪权威来源、任务、权限、验证与交接制度。归档规范仅为来源材料，不覆盖当前项目明确规则。
+
+## 7. 证据写法
 
     evidence:
       - command: PYTHONPATH=src python -m pytest tests/unit/test_state.py -q

@@ -1,5 +1,7 @@
 # SESSION_HANDOFF
 
+> 更新日期：2026-11-23。TASK-011 整理工程文档结构：执行计划归位 planning/，迁移后的旧规格/规范入口已清理；详见 tasks.json 和工作区 Diff。后续交接时核对 Git 和实际文件。
+
 > 每个 Session 结束前更新。新 Session 必须核对 Git 与实际文件，不盲信本文件。
 
 ## 1. Session 信息

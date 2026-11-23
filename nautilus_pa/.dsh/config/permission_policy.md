@@ -11,7 +11,7 @@
 | WEB | `web/**` | 前端工作台 |
 | CONFIG | `configs/**` | 冻结配置、回归样本 |
 | SCRIPT | `scripts/**` | 采集、校验、服务脚本 |
-| DOC | `README.md`、`USAGE.md`、`执行计划.md`、`docs/**`、`requirements/**`、`development/**` | 文档 |
+| DOC | `README.md`、`USAGE.md`、`planning/**`、`docs/**`、`requirements/**`、`requirements/**`、`development/**` | 文档 |
 | STATE | `.dsh/**` | 任务、契约、会话、审查、preset、脚本 |
 | UPSTREAM | 仓库根 `nautilus_pa/` 之外的任何路径 | 上游 NautilusTrader 代码与配置 |
 
