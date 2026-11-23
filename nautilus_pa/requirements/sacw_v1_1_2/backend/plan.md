@@ -175,7 +175,7 @@ class CalibrationService(Protocol):
 - **B01b 回归器**：PB 断言 mapping、负向 evaluator、blocked classification、run 汇总正确；依赖 domain 能力和持久化。阻塞不得误算 PASS。
 - **B02b 标注工具/边界**：依赖 B00、标注 schema 与 API；与 B02a 可按文件互斥平行。
 - **B03a 数据冻结/审阅**：数据集、annotation、split hash、审批与审计；依赖 annotation store/API；OD-05 的样本/责任/裁决/统计定义必须经授权冻结。
-- **P0-E/B03b**：完整 PB-01…51 自动化黄金样本、逐项 PASS、统计与报告；依赖 B01b、B03a、适用 P0-A…F。当前没有证据可宣称通过。
+- **P0-E 输入冻结 / B03b 输出验收分离**：PB-01…59 场景、期望及可用夹具先冻结；当前阶段适用 PB 执行，后续 PB 在对应功能阶段执行。P0-E 依赖 B01b、B03a、适用 P0-A…F；B03b 的状态统计报告在 P1-A 实现后产出，不倒置为编码前置。当前没有证据可宣称通过。
 - **P1-A**：只有 P0-E 与 OD-05 证据均通过才可准入；不是当前立即实施项目。OD-04 仍限制相关状态迁移。
 - **B02a / P0-F 成本元数据**：可与工具/回归工作并行但涉及独立风险精度、配置门禁；不得改变交易 API 语义。
 - **B04→B05→B06→B07→B08→B02c→B09**：严格按执行计划的策略链依赖推进；Setup/Signal/Execution/Risk/Order/Portfolio 回放逐阶段实现验收，B02c 依赖 B06 与 B08，B09 依赖 P0–P2。
@@ -203,3 +203,6 @@ class CalibrationService(Protocol):
 ## 8. 验证与方案使用
 
 本方案的文档校验不替代任何代码阶段验收。后端实现任务须按批次列出可运行 pytest 范围、API 集成契约、数据库迁移和回滚证据；当前 379 passed 是执行计划的历史实测快照（2026-11-21），不能代替后续精确状态验收。本方案编制本身不得修改业务代码或运行数据。
+## 9. 增量任务追溯（TASK-015，2026-11-23）
+
+任务定义及 SPEC→PLAN→TASK→TEST 关系以 `../../../.dsh/tasks/tasks.json` 为准；拆分规则见 `../../../.dsh/tasks/ATOMIC_TASK_RULES.md`。本次同步已批准 CR-001 的 PB 分期门禁，不新增业务语义；OD-08 继续阻断绩效验收，OD-09 阻断多低点自动入场。已核实 PATCH 必传令牌及 Golden 自动三分/hash 已实现，不重复开发；历史功能存在不代表整批出口完成。

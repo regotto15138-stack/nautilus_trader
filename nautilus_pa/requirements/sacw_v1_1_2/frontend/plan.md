@@ -121,3 +121,6 @@ interface WorkbenchController {
 ## 7. 验收与交付
 
 前端验收以接口契约一致性、七周期/完整 Bar/分层图层、409 冲突流程、freeze 状态只读、PB blocked 可见、无策略计算为核心；浏览器集成测试/截图验收另行指定。当前测试脚本可能直接调用 API dispatch，不能当作浏览器 UI 验收。任何前端实现另建 TASK，明确允许文件和验证步骤；本 plan 本身不含代码改动。
+## 8. 增量任务追溯（TASK-015，2026-11-23）
+
+任务定义及 SPEC→PLAN→TASK→TEST 关系以 `../../../.dsh/tasks/tasks.json` 为准；拆分规则见 `../../../.dsh/tasks/ATOMIC_TASK_RULES.md`。保持 Vanilla JS 渐进模块化，不默认引入框架。浏览器验证与 API 测试分开登记。PB-01…59 按功能阶段执行，blocked 不得画成 PASS；OD-08 绩效、OD-09 多低点限制均须显示，不由 UI 解除。

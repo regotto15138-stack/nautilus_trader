@@ -15,7 +15,7 @@
 
 ## 2. 当前状态（2026-11-23）
 
-- 测试基线：349 passed（`PYTHONPATH=src python -m pytest -q`）。
+- 测试基线：2026-11-23 实测 379 passed in 35.57s（`PYTHONPATH=src ../python/.venv/bin/python -m pytest -q`）；不代表阶段/人工/浏览器验收通过。
 - 已实现：P0-A～P0-D——七周期时间与 Bar 处理、SMA22/ATR14、ZigZag、SwingPoint、
   保护点、Zone 引擎、N 结构、宏观与 4H/1H 状态机、CanOpen/CanHold；
   SACW 标注库、标注 API、ANCHOR_ONLY / HUMAN_BOUNDARY 几何、HUMAN_JUDGED Swing、
@@ -67,7 +67,7 @@ SwingPoint、ProtectedLow/High、PullbackOriginHigh、N 结构、Zone）。
 
 ## 6. 当前任务
 
-以 `.dsh/tasks/tasks.json` 为准。当前无进行中任务；`TASK-002` 为 DRAFT（B00 PATCH 乐观锁）。
+以 `.dsh/tasks/tasks.json` 为准。2026-11-23 TASK-015 增量拆分三份计划；新增 TASK-016…094 为 DRAFT，尚未执行业务实现。TASK-002 保留并收敛后端并发边界，已实现部分与未验收部分分开登记。拆分规则见 `.dsh/tasks/ATOMIC_TASK_RULES.md`，SPEC→PLAN→TASK→TEST 及依赖均在台账，不另维护状态表。
 
 ## 7. 开发约束
 

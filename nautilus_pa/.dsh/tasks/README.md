@@ -33,6 +33,14 @@ CANCELLED（明确终止）。
 5. **测试明确**：验收标准能落到具体命令/断言。
 6. **风险明确**：列出失败模式与回滚方式。
 
+## 2.1 原子性、独立验证与增量追溯
+
+TASK-015 增补规则见 [原子任务与增量追溯规则](ATOMIC_TASK_RULES.md)。原子性是单目标、明确边界，不是单文件；独立验证是可用已验收前置与固定夹具单独判断任务出口，两者分别记录。新任务 DRAFT 不表示已获准开工。规格变更只调整受影响任务并追加 revisions，保留全部历史 ID 与证据。
+
+台账新增字段：`traceability`、`verification`（唯一 TEST-ID/命令/断言/运行状态）、`deliverables`、`inputs`、`non_goals`、`atomicity`、`risk_rollback`、`blockers`、`dependency_reasons`。旧任务字段不追溯冒充完整新契约。`planning_baseline` 保存权威输入哈希；变更后先影响分析再更新基线，不自动批准规格语义。
+
+验证：`python3 .dsh/scripts/validate_tasks.py` 检查状态及 DAG；`python3 .dsh/scripts/validate_traceability.py` 检查来源、唯一 TEST-ID、测试命令一致性、基线哈希和新增任务文件互斥排序。两个校验通过不替代任务业务测试、浏览器及人工验收。
+
 ## 3. 粒度参考
 
 | 类型 | 例子 | 复杂度 |
