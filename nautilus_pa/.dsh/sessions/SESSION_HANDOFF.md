@@ -41,7 +41,7 @@
 
 ## 4. 未完成
 
-- **重启 `dsh web` 使 PTC 关闭与裁剪阈值生效**，并开新会话核对系统提示是否从 108K 降到约 25K（阻塞点：重启会中断当前会话，需用户执行）。
+- ~~重启 `dsh web`~~ 已完成（用户于 2026-11-23 13:13 重启）；当前会话系统提示实测 15,771 字符，PTC 档的 100,432–106,349 字符不再出现。
 - `preset-ptc` 的 patch 只覆盖 `tool-result-pruner`，`selectedDefault: ptc` 仍在；下次进 PTC 预设时应再确认 `request/header.tools` 只有 1 个入口。
 - 尚未评估把常驻的 agent-teams/agency 段按需装卸（需各自插件提供开关，未验证可行性）。
 
@@ -54,8 +54,8 @@ backtest html、`okx.pcap`）与本任务无关，保持原状。
 
 - 仓库：父仓库 `/home/regotto/Code/nautilus_trader`（子工程无独立 git，见 D-007）
 - 分支：（新 Session 自行 `git -C .. branch --show-current` 核对）
-- 提交：无（未获用户授权；按 AGENTS.md 第 3 节，等待用户明确要求后以 `TASK-013 ...` 提交）
-- 未提交改动（仅本任务范围）：
+- 提交：`d70acfadc4`（TASK-013）、`bca9061e0f`（TASK-014），分支 `fork-develop`
+- 已提交改动（仅本任务范围）：
   - `nautilus_pa/AGENTS.md`
   - `nautilus_pa/.dsh/config/token_budget.md`
   - `nautilus_pa/.dsh/sessions/SESSION_HANDOFF.md`
@@ -113,10 +113,10 @@ backtest html、`okx.pcap`）与本任务无关，保持原状。
 
     （新 Session 自己跑：git -C .. status --short && git -C .. log -3 --oneline）
 
-    本 Session 结束时未提交改动（nautilus_pa/ 下 7 个文件）：
-    AGENTS.md、.dsh/config/token_budget.md、.dsh/sessions/SESSION_HANDOFF.md、
-    .dsh/tasks/tasks.json、requirements/templates/ai-project-bootstrap/{AGENTS.template.md,
-    SESSION_HANDOFF.template.md, BOOTSTRAP_CHECKLIST.md}
+    本 Session 的改动已于 2026-11-23 提交到分支 fork-develop（用户授权）：
+    d70acfadc4 TASK-013 核算并收口 Session token 消耗
+    bca9061e0f TASK-014 把开发复盘制度同步进 AI 项目启动模板
+    nautilus_pa/catalog/data/bars/ 下的 parquet 属采集产物，与本 Session 无关，未 stage。
 
 ## 13. Token 使用
 
@@ -130,4 +130,4 @@ backtest html、`okx.pcap`）与本任务无关，保持原状。
 ## 14. 交接结论
 
 可以继续。文档与配置改动完整、`validate_tasks.py` 通过；**Git 未提交**（等用户授权），
-**`dsh web` 未重启**（PTC 关闭与裁剪阈值尚未生效）。下个 Session 先做第 10 节第 1 步。
+`dsh web` 已由用户重启（PTC 关闭已生效，新会话系统提示降到约 15.7K 字符）。下个 Session 先做第 10 节第 1 步。
