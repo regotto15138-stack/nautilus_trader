@@ -774,6 +774,118 @@
         "artifacts": []
       },
       "notes": "用户本轮同意将推荐的确定性默认方向落入规格：SwingLow后选SwingHigh；回测每笔入场首个合格Bar全额成交；OD-03未决阻断对应能力。修改前记录CR。"
+    },
+    {
+      "id": "TASK-013",
+      "title": "核算并收口 Session token 消耗（fixed prefix / cache miss / 复盘断档）",
+      "requirement_refs": [
+        "REQ-000"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P1",
+      "complexity": "M",
+      "owner": "lead",
+      "role": "main",
+      "created_at": "2026-11-23",
+      "updated_at": "2026-11-23",
+      "depends_on": [],
+      "objective": "用会话账本量化单次请求固定前缀成本、缓存未命中与重复读取，落地可配置的降低成本措施，并在项目规范中写入开发复盘触发条件与交接前置条件。",
+      "context_files": [
+        "nautilus_pa/AGENTS.md",
+        "nautilus_pa/.dsh/config/token_budget.md",
+        "nautilus_pa/.dsh/sessions/SESSION_HANDOFF.md",
+        "nautilus_pa/planning/EXECUTION_PLAN.md"
+      ],
+      "allowed_paths": [
+        ".dsh/config/token_budget.md",
+        ".dsh/sessions/SESSION_HANDOFF.md",
+        "AGENTS.md"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "requirements/",
+        "planning/",
+        "docs/",
+        ".dsh/tasks/tasks.json"
+      ],
+      "acceptance": [
+        "token_budget.md 记录固定前缀构成与预算核算方法",
+        "AGENTS.md 写入开发复盘触发条件与交接前置条件",
+        "SESSION_HANDOFF.md 结构与 AGENTS.md 第 8 节一致并写入本次会话结论",
+        "python3 .dsh/scripts/validate_tasks.py 通过"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "六项拆分门槛已核对：需求 REQ-000；字段完整；可独立验证（validate_tasks）；无依赖；测试命令明确；风险已知（配置改动静默失效）",
+          "开工：编辑 token_budget.md 新增第 6 节、AGENTS.md 新增第 12 节与第 8 节前置条件、重写 SESSION_HANDOFF.md",
+          "token_budget.md 第5-8节、AGENTS.md 第8/12节、SESSION_HANDOFF.md 重写完成；validate_tasks.py ok: 13 task(s)",
+          "自审：diff 仅含 allowed_paths 内 4 个文件；无 src/tests 改动；数据均来自账本聚合",
+          "文档类任务：测试计划唯一命令 validate_tasks.py 已通过（2026-11-23 13:05）",
+          "ACCEPTED：三项验收条目均落地，validate_tasks.py ok:13；未提交 Git（等用户授权），dsh web 未重启（已在交接第 4 节列为未完成）"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": "来源：session-c996353b-c0c2 的 250 次请求账本（input 1,526,819 / cache_read 44,918,016 / output 58,665）。固定前缀约 108KB，其中 run_code SDK 约 91KB。"
+    },
+    {
+      "id": "TASK-014",
+      "title": "把开发复盘制度同步进 AI 项目启动模板",
+      "requirement_refs": [
+        "REQ-000"
+      ],
+      "status": "ACCEPTED",
+      "priority": "P2",
+      "complexity": "M",
+      "owner": "lead",
+      "role": "main",
+      "created_at": "2026-11-23",
+      "updated_at": "2026-11-23",
+      "depends_on": [],
+      "objective": "把 nautilus_pa/AGENTS.md 第 12 节『开发复盘』制度按项目无关口径裁剪后同步进 requirements/templates/ai-project-bootstrap/，使新建工程默认带上复盘触发条件与交接复盘栏目，不携带 nautilus_pa 的交易域路径与规则。",
+      "context_files": [
+        "nautilus_pa/requirements/templates/ai-project-bootstrap/AGENTS.template.md",
+        "nautilus_pa/requirements/templates/ai-project-bootstrap/SESSION_HANDOFF.template.md",
+        "nautilus_pa/requirements/templates/ai-project-bootstrap/BOOTSTRAP_CHECKLIST.md",
+        "nautilus_pa/AGENTS.md"
+      ],
+      "allowed_paths": [
+        "nautilus_pa/requirements/templates/ai-project-bootstrap/"
+      ],
+      "forbidden_paths": [
+        "nautilus_trader/nautilus_pa/src",
+        "nautilus_trader/nautilus_pa/AGENTS.md"
+      ],
+      "acceptance": [
+        "模板新增开发复盘规则与交接复盘栏目，且只保留裁剪占位符、不引入交易域路径",
+        "BOOTSTRAP_CHECKLIST 增加对应勾选条目",
+        "python3 .dsh/scripts/validate_tasks.py 通过"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py",
+        "grep 检查模板正文不含 nautilus_pa 专有路径",
+        "git diff --check 与 git diff --stat 核对仅改动模板 3 个文件"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "开始同步复盘制度到 ai-project-bootstrap 模板",
+          "AGENTS.template.md 新增第5节开发复盘；SESSION_HANDOFF.template.md 新增第6节开发复盘并把恢复指令改为第7节；BOOTSTRAP_CHECKLIST 增加勾选项",
+          "自审 diff：仅模板三文件，无交易域路径",
+          "validate_tasks.py ok；git diff --check 通过",
+          "validate_tasks.py ok: 14 task(s)；模板与项目 AGENTS.md 第12节口径一致"
+        ],
+        "reviews": [],
+        "artifacts": []
+      },
+      "notes": ""
     }
   ]
 }
