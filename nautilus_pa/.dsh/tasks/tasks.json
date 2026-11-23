@@ -699,6 +699,81 @@
         "artifacts": []
       },
       "notes": "纯文档结构调整，删除仅限完整迁移并经引用审查的旧文件；保留工作区现有用户变更。"
+    },
+    {
+      "id": "TASK-012",
+      "title": "补齐 V1.4.8 规格执行与风险闭环",
+      "requirement_refs": [
+        "REQ-009"
+      ],
+      "status": "REVIEWING",
+      "priority": "P1",
+      "complexity": "M",
+      "owner": "lead",
+      "role": null,
+      "created_at": "2026-11-23",
+      "updated_at": "2026-11-23",
+      "depends_on": [],
+      "objective": "根据本轮用户确认修订 V1.4.8 扩充规格：补齐 3M SwingLow→SwingHigh 先后关系和首个合格 Bar 全额成交回测规则；统一 P1-A 门槛；将 OD-03 风险异常能力明确设为门禁；补齐 PnL/Funding 指标口径或准入边界，确保跨章一致。不得自行扩张到用户未批准的 Live 订单重试行为。",
+      "context_files": [
+        "requirements/spec_v1_4_8/README.md",
+        "requirements/spec_v1_4_8/OPEN_DECISIONS.md",
+        "requirements/spec_v1_4_8/12-3M 执行确认.md",
+        "requirements/spec_v1_4_8/13-订单与成交执行规范.md",
+        "requirements/spec_v1_4_8/17-仓位与风险闭环.md",
+        "requirements/spec_v1_4_8/21-回测与验证规范.md",
+        "requirements/spec_v1_4_8/22-回测统计.md",
+        "requirements/spec_v1_4_8/23-开发顺序.md",
+        "requirements/spec_v1_4_8/24-冻结条件.md",
+        "requirements/spec_v1_4_8/25-版本结论.md",
+        "requirements/CHANGE_REQUESTS.md",
+        "development/DECISIONS.md"
+      ],
+      "allowed_paths": [
+        "requirements/",
+        "development/",
+        ".dsh/tasks/"
+      ],
+      "forbidden_paths": [
+        "src/",
+        "tests/",
+        "web/",
+        "configs/",
+        "catalog/",
+        "var/"
+      ],
+      "acceptance": [
+        "12章明确SwingLow发生和确认先于可用SwingHigh；单一低点首个高点选择及边界示例明确；多低点选择未获授权时登记 OD-09 并禁用该场景",
+        "13章定义Bar回测首个合格Bar全额成交及订单状态转换边界；不推导Live规则",
+        "OPEN_DECISIONS与相关章节统一OD-03、P1-A门禁",
+        "22章定义回测净PnL/R及Funding/未平仓处理或明确阻断绩效准入；14/17/21交叉一致",
+        "新增CR记录及DECISIONS记录；相对链接与章节结构校验、任务台账校验、git diff --check通过；不改代码"
+      ],
+      "test_plan": [
+        "python3 .dsh/scripts/validate_tasks.py",
+        "检查nautilus_pa Markdown本地相对链接",
+        "检查章节模板结构和关键条款交叉引用",
+        "git diff --check -- nautilus_pa"
+      ],
+      "branch": null,
+      "commits": [],
+      "evidence": {
+        "commands": [
+          "拆分六门槛核对：可追溯REQ-009；目标/输入/输出/验收/测试明确；规格审查可独立验收；无依赖；验证含台账/链接/结构/Diff；失败可依归档原文与Git diff回退，不触及交易代码。",
+          "开工：按用户确认只补规格闭环，不改变未授权交易语义。",
+          "用户要求按审核建议修订；其中部分建议需要固定原规格未定义的策略/撮合/统计语义，按 requirements/CHANGE_REQUESTS.md §2 需由用户确认后才能落地。已提出 CR 范围确认，当前未获得答复；未修改规格或决策/变更记录。",
+          "用户在方案选择中明确选择：SwingLow确认后选择后续SwingHigh；Bar回测首个合格Bar全额成交；OD-03未决时阻断对应能力。落地范围限定单一有效低点且首根预期Bar存在有效；多低点选择转OD-09。现按CR-001落规格；未指定的PnL与Funding口径仍作为开放决策和门禁，不代为确定。",
+          "TASK-012 修订范围：CR-001 已用户确认；决策及依据见 requirements/CHANGE_REQUESTS.md 与 development/DECISIONS.md。",
+          "CR-001 执行、回测与门禁规则已写入规格；新增 PB-52..PB-59 为按阶段验证的预期场景，非已运行测试。首次自检：python3 .dsh/scripts/validate_tasks.py -> ok: 12 task(s)；范围内 Markdown 链接检查 -> 73 files, broken=0；25章结构检查与 PB 编号检查 -> 25/25、1..59 无缺号；git diff --check -- nautilus_pa -> 0。尚未运行策略/回测测试（只改文档）。后续审查发现的多低点歧义转 OD-09，阶段门禁环、时间跳过歧义和异常冻结范围已修订；须对最终 Diff 重新核验。",
+          "独立静态复核：执行章节与流程章节两名 Reviewer 检查最终 Diff；第12/13章首根预期Bar、单低点与OD-09、P1-A分期门禁、OD-03冻结范围经返工后无新发现的阻断性跨章冲突。范围仅文档；待按 ACCEPTANCE 逐项决定能否 ACCEPTED。复核命令：链接73份0坏、章节25/25、PB编号59/59连续、validate_tasks.py 12 tasks、git diff --check 0；策略代码与回测未执行。"
+        ],
+        "reviews": [
+          "2026-11-23 final-spec-review: PASS（仅 TASK-012 文档 Diff 静态一致性；P1-A 阶段环、多低点 OD-09 门禁、OD-03 异常冻结与首根预期 Bar 冲突返工后未发现新增阻断项；未跑策略/回测）。",
+          "2026-11-23 final-process-review: PASS（限 TASK-012 文档 Diff 一致性；CR-001/D-010/OD-09 边界、PB-54 缺失 Bar、风险与绩效门禁已交叉核对；独立运行 validate_tasks.py=ok:12 与 git diff --check=0；不等于项目策略验收）。"
+        ],
+        "artifacts": []
+      },
+      "notes": "用户本轮同意将推荐的确定性默认方向落入规格：SwingLow后选SwingHigh；回测每笔入场首个合格Bar全额成交；OD-03未决阻断对应能力。修改前记录CR。"
     }
   ]
 }
