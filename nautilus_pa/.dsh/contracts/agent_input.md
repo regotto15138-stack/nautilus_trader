@@ -42,6 +42,18 @@ Main 下发任务时使用本格式。缺任一必填字段，子 Agent 必须�
 
 ## 自动生成
 
+### 变更控制必填字段
+
+除上述字段外，必须原样下发 `spec_id`、`change_level`、`change_policy`、`impact_analysis`、
+`approval`、`dependency_policy`、`on_scope_violation=BLOCK_AND_REPORT`。
+字段与权限语义见 [架构保护契约](../../docs/architecture/ARCHITECTURE_CONTRACT.md)。
+必须保留 `status`、`priority` 及台账已有的 `incremental_plan`、`blockers`、`traceability`、
+`verification`、`dependency_reasons`、输入/产物/非目标/风险；已有字段不能在下发时丢失。
+Developer 仅接受 READY/IN_PROGRESS；审查角色可接受 IMPLEMENTED/REVIEWING/TESTING，
+但同样不能绕过变更契约和阻塞。只读的未批准需求分析由 Main 进行，不下发为实现任务。
+CLI 的 `interfaces` 只能与台账完全一致；接口许可应在批准的 TASK 中固定。
+旧任务缺变更控制字段时拒绝执行，不凭历史状态推断授权。
+
     python .dsh/scripts/taskctl.py dispatch TASK-002 --role developer
 
 从 `tasks.json` 读取任务并渲染上面的 JSON，直接粘贴给子 Agent 或作为 subagent prompt 的种子。
@@ -55,3 +67,4 @@ Main 下发任务时使用本格式。缺任一必填字段，子 Agent 必须�
 | DESIGN_CONFLICT | 需求与现有架构/接口冲突 | 停止，给出冲突证据 |
 | CONTEXT_LIMIT | 预算不足以完成 | 停止，交接已完成部分 |
 | FAILED | 实现或测试失败 | 报告失败原因与已尝试方案 |
+| BLOCK_AND_REPORT | 文件越界或变更级别不足 | 停止受影响任务，报 Diff/冲突与最小变更请求，不自行扩权 |

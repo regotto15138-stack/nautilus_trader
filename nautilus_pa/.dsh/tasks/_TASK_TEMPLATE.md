@@ -44,6 +44,34 @@
 
 ## 7. 技术约束
 
+### 强制变更控制（机器字段写入 tasks.json）
+
+```yaml
+spec_id: SPEC-...
+change_level: L1
+change_policy:
+  default: minimal_patch
+  refactoring_allowed: false
+  public_api_change_allowed: false
+  database_schema_change_allowed: false
+  frontend_change_allowed: false
+on_scope_violation: BLOCK_AND_REPORT
+impact_analysis:
+  rules: [具体条款]
+  modules: [具体模块]
+  interfaces: [保持不变的接口或允许变化清单]
+  tests: [具体回归与兼容性检查]
+  code_change_required: true
+  architecture_compatible: true
+  decision: minimal_patch
+  sources: {} # 审阅输入的相对文件路径到SHA-256；必须补齐
+approval: {} # 真实人工授权的level/approved_by/evidence；L2/L3另需separate_approval
+dependency_policy: {} # 默认前置须ACCEPTED；write_order例外须有明确释放证据
+```
+
+DRAFT 中空分析/审批不得执行；完整流程见
+[架构保护契约](../../docs/architecture/ARCHITECTURE_CONTRACT.md)。
+
 - 不得引入新依赖（除非任务明确要求）。
 - 保持公开接口兼容 / 明确接口变更清单。
 - 遵循上游仓库 `AGENTS.md` 与 `docs/developer_guide/coding_standards.md`。

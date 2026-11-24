@@ -2,10 +2,93 @@
 
 **策略语义基线：** [V1.4.8 扩充结构化规格](../requirements/spec_v1_4_8/README.md)（本目录唯一权威）
 **SACW 基线：** V1.1.2（后续以仓库当前规格文件为准）
-**当前状态核对：** 2026-11-21；完整测试 `PYTHONPATH=src python -m pytest -q` → **379 passed**。命令使用 `nautilus_pa/../python/.venv` 的 uv 项目环境；这是执行时工作树的验证结果，不等于任何阶段出口已过。
+**历史状态核对：** 2026-11-21；完整测试 `PYTHONPATH=src python -m pytest -q` → **379 passed**。命令使用 `nautilus_pa/../python/.venv` 的 uv 项目环境；这是执行时工作树的验证结果，不等于任何阶段出口已过。
 **开发目的：** 将现有代码能力、SACW 批次 B00…B10d 与 V1.4.8 P0…P3 统一映射，作为后续技术方案、任务书及出口验收的基线。本文是计划，不替代 `.dsh/tasks/tasks.json` 的任务状态事实。
 
 ---
+
+
+## 当前增量执行入口（TASK-101，2026-11-24）
+
+本节补充并取代下文历史排期中的开发顺序建议；策略阶段出口仍遵守第 5 节。
+任务状态只读 [tasks.json](../.dsh/tasks/tasks.json)，本文不维护第二份状态表。
+本轮仅核对计划、台账与关键代码入口，未重新运行业务测试或浏览器验收。
+
+### 剩余任务与优先级
+
+本轮开始时 100 项：ACCEPTED 10、IMPLEMENTED 8、REVIEWING 3、IN_PROGRESS 4、
+BLOCKED 1、DRAFT 74；因此 remaining 为 **90 项**，包含实现后尚未正式验收的任务。
+TASK-101 是本轮计划修订任务，单列，不计入上述存量数字。
+原 90 项已逐项填写 `priority`、`priority_reason`、`incremental_plan` 与修订记录，
+其中 P0 13、P1 41、P2 23、P3 13。此数字为本轮核对快照；后续以台账查询为准。
+
+| 调度级别 | 本轮含义 | 任务范围与处理 |
+| --- | --- | --- |
+| P0 | 当前正确性、并发安全、验收真实性及候选门禁 | TASK-002/017/022/023/029/030/031/032/035/066/095/099/100；优先收口已有差量与证据 |
+| P1 | 基础契约、人工真值、工作台闭环 | 回放/比较/PB/标注冻结、P0-E/P1-A、前端契约与研究页面；按台账逐项调度 |
+| P2 | 后续策略链、报告及历史文档收口 | TASK-041…057、088/089、005…008；只在各自阶段准入后实施 |
+| P3 | 后续参数研究与配置治理 | TASK-058…065、090…094；本阶段保持设计与门禁，不抢占基础收口窗口 |
+
+这里 P0…P3 是任务调度优先级，区别于策略阶段 P0…P3 和缺陷严重度。
+SACW [第 31 章](../requirements/sacw_v1_1_2/31-实施优先级.md) 是功能重要性来源，
+其中交易投影虽重要，也须等待真实引擎；不能据其原始 P0 标签提前开发占位交易链。
+高优先级不能越过 `depends_on`、人工批准、规格门禁或单文件单写者。
+前置优先级较低时先处理真实前置，不按任务编号或 P 值强行开工。
+
+### 四波增量交付
+
+波次描述投入顺序与交付目标，不是整波完成后才能动下一波。已批准契约和文件无冲突的
+切片可独立推进；业务前置必须正式验收。候选条款仅可用显式研究夹具验证。
+
+| 波次 | 后端差量 | 前端差量 | 出口与可保留能力 |
+| --- | --- | --- | --- |
+| W0 当前缺陷与基线 | TASK-002/017 的并发边界；022/023 禁止伪 PASS；029…032/034/035 收口已实现部分；095 逐条批准矩阵 | TASK-066 固定七周期浏览器基线；099/100 在现有历史载荷和 fe-zone 上补真实数据证据 | 不重做已实现PATCH、Zone图层或成本账本；审批未决不算出口 |
+| W1 基础与研究闭环 | 016…028 的契约/回放/比较/PB/真值；033/036…040 的恢复、准入、状态验收 | 067…087 在现有函数中逐入口接入；083 保留BLOCKED并从其余页面前置移除 | 每个 TASK 单独可运行；固定夹具开发不代替真实联调/人工冻结 |
+| W2 交易链逐阶段增加 | 041…043 Setup → 044…046 Signal → 047/048 Execution → 049…054 Risk/Order/Fill → 055…057 报告 | 088 消费真实事件投影，089 同版本导出 | 沿用 lifecycle 契约与现有引擎；不重写结构层，不以模型存在代替业务完成 |
+| W3 参数实验与治理 | 058…060 输入与Holdout → 061…063 搜索/报告/OOS → 064/065 人审发布回滚 | 090…094 对应后端能力逐项启用 | 无后端能力就显示阻塞；保留 FIXED/REQUIRED/METADATA 保护与人工授权 |
+
+TASK-005…008/012/097/098 为历史文档或契约收口，核现有证据，不重复实现；
+TASK-029/034/099/100 有实现但仍需正式审查，TASK-030/031/032/035 继续保留 IN_PROGRESS。
+TASK-083 原 BLOCKED 原因未完整登记，本轮补为“恢复前核查诊断字段及原阻塞原因”，不擅自解除。
+TASK-095 对 OD-05/人工样本等的既有前置仍保留，优先级不表示这些批准已经到位。
+
+### 每次规格变动的最小实施单元
+
+每个台账任务的 `incremental_plan` 记录复用入口、差量、步骤、兼容、回退和开工条件。
+执行者先用该任务 `test_plan` 建立基线，把验收分成已满足、残余、未决；已满足项只做回归。
+本轮新补的步骤与测试要求均未执行，不得覆盖原 `evidence`/`verification` 的历史含义。
+
+1. 对照具体 SPEC 条款和现有函数，只列真正变化的字段或分支；超过约 400 行或出现第二目标先拆新 TASK。
+2. 先补固定输入的差量断言，再改规则所属函数；同一任务不顺便换框架、拆全部服务或重建状态管理。
+3. 后端先保留旧端点和序列化键，按统一接口契约增加可识别的来源/版本/诊断；缺必需语义则明确拒绝。
+4. 前端先在现有调用入口接兼容结果，再局部接消费；只提取本次确实需要单测的纯函数，保留现有 state/事件绑定。
+5. 固定夹具契约通过后做真实 HTTP/SQLite/浏览器验证，记录数据和配置 hash、候选状态、负例与回退范围。
+6. 回退只撤本切片代码；数据库变更先验证备份和事务升级，不删除标注、冻结集、回放或审计历史。
+
+TASK-032 单独设 Z1 原子顺序、Z2 几何/寿命、Z3 诊断/消费契约三个串行检查点，
+复用已有 ZoneEngine/快照。它们不是新的 TASK-ID 或独立验收结论；任一检查点超范围需先另登记任务。
+Setup/Signal 的业务接入仍由 TASK-041…046 负责，不能塞入 Zone 收口。
+
+### 依赖及技术文档
+
+前端原 TASK-067…094 的 422 条直接边收敛为 35 条（本轮脚本核对）；
+传递可达的真实前置仍保留。TASK-083 移至共享 web 写入队列末尾，
+TASK-084 改沿 TASK-082 之后接入，避免一个被阻塞的指标展示任务卡住 PB、比较与快照。
+这是文件写入排序，不是“PB必须依赖指标算法”；TASK-083 解除阻塞后可由 Main 重新校验 DAG/文件冲突并前移。
+当前仍共享 app.js/index.html/styles.css，不能据移除冗余直接边同时写这些文件。
+
+实施设计必须同时读以下文档；其中模型/Protocol 是目标契约，不要求先重构到目标模块图：
+
+| 文档 | 本轮细化内容 | 对应任务 |
+| --- | --- | --- |
+| [SACW 后端技术说明](../requirements/sacw_v1_1_2/backend/plan.md) §11 | 现有API/Store/Engine复用、并发/回放/PB/Zone差量、兼容与验证 | TASK-002、016…065、095、099 |
+| [SACW 前端技术说明](../requirements/sacw_v1_1_2/frontend/plan.md) §10 | 现有函数接入点、页面切片、模块抽取限制、真实浏览器出口 | TASK-066…094、100 |
+| [统一接口契约](../requirements/sacw_v1_1_2/interface-contract.md) | 唯一 wire 来源；本轮未新增端点或改变字段语义 | 两端联调均遵守 |
+
+当前技术基线继续为 Python 标准库 HTTP + SQLite + Parquet、Vanilla JS + Lightweight Charts。
+本轮不计划 React/TS/FastAPI/PostgreSQL/DuckDB 迁移，不新增依赖，不整体搬迁 app.js 或应用层。
+真实 catalog 全量启动慢/内存高是上轮交接记录的待复现风险，本轮不据此直接改快照保留策略；
+若阻断真实浏览器出口，先登记独立的性能诊断 TASK、固定数据hash和资源指标，再决定最小修复。
 
 ## 〇、状态核对与证据（2026-11-21）
 
@@ -72,6 +155,56 @@
 - 已核实 Golden 自动三分及 time_split_hash 有实现和测试；不再把这两项列作全新功能。人工复核/OD-05/冻结数据交付仍未完成。
 - P0-E 输入冻结 → P1-A 实现 → B03b 状态评估 → Setup → Signal → Execution → Risk → Order → 成本接入；PB 按所属阶段执行，最终冻结再汇总，禁止依赖回环。
 - OD-01/03/04/05/06/07/08/09 均按最新 OPEN_DECISIONS 限制，不因任务制定而解除。
+
+## 〇.1 2026-11-23 五章规格修订增量同步
+
+用户修订了 SPEC-V148-03/04/05/06/14；五章当前均为 `REVIEW_CANDIDATE`，不自动视为冻结交易语义。已更新 `.dsh/tasks/tasks.json` 的 `planning_baseline` 哈希及 TASK-029/030/031/032/034/035 的 `revisions`、验收和依赖；历史任务与证据保留。
+
+- **P0-A / TASK-029**：加入 `available_at`、最终性/时间/完整性三门禁、source/sequence、3M递归与周/月分支、CompletionBatch 顺序、Snapshot 原子性及缺口/迟到隔离。
+- **P0-B / TASK-030**：按 HIGH_LOW 候选、ATR 快照、初始化与同 Bar 歧义、确认 Bar 后下一根启动、Swing 不可变契约和缺口重暖机验收；OD-07 仍阻断正式冻结。
+- **P0-C / TASK-031**：按确认时序建立保护点和 N 结构，冻结成员/版本，保留空头交易和 ATR 时点未决，不推导交易许可。
+- **P0-D / TASK-032**：加入 Zone 几何硬上限、突破优先级、测试语义、锚点年龄与整体寿命、终态不复活及 Setup/Signal 版本联动；OD-ZONE-01..06 仍阻断候选规则冻结。
+- **P0-F / TASK-034→035**：拆分逐 Fill 原始费用账本与启动门禁，覆盖固定 ticks 滑点、Maker/Taker、Funding 事件、版本化合约元数据、FX/量纲、去重及 OD-08。
+
+受影响的后续任务（TASK-033/036/037/038/040/041/042/043/047/049/054/055/056/057）须消费上述新契约；在对应上游任务验收前不得按旧断言宣称通过。
+
+SACW 设计文档已同步（TASK-096）：`requirements/sacw_v1_1_2/` 的后端 plan、前端 plan、统一接口契约与 README 增加 Bar envelope/CompletionBatch、Swing/Zone/保护点、成本与元数据字段、候选规格徽标与诊断门禁；新增端点与字段一律标为设计提案，未改变任何实现或验收结论。
+
+## 〇.2 2026-11-24 五章规格代码审计（缺口矩阵）
+
+按用户指令以五章规格（03/04/05/06/14）为唯一权威重审代码，五个只读子代理分别审计各章，输出「规格条款→代码现状→file:line」与最严重缺口。本节为规格→任务映射的权威缺口清单，取代旧「已实现」印象；每条缺口归入对应任务，按任务允许路径修复。
+
+**03 时间/Bar（TASK-029）**
+- P0：三重完成门禁未接入摄入路径——`adapters/nautilus/collector.py:427-432,487-493` 仅凭本地时钟 `now>=close` 关 Bar，无 finality_guard/最终性/完整性证明，`evaluate_bar_completion` 从未被调用（违反「不得仅凭本地时间推定完成」）。
+- P0：`CompletionBatch(T)` 七阶段原子提交整体缺失（无类型/编排/原子屏障）；`MarketSnapshot` 是按需读实时状态（`market_context.py:155-196`），非批次不可变快照；状态机→信号→风险订单后三环未实现。
+- P1：无有界重排序缓存与迟到重放（迟到隔离 `bar_stream.py:156-160`、乱序抛异常 `aggregation.py:130-134`）。
+- P1：聚合链未作唯一数据路径（collector 采原生多周期含 1W，`bar_converter.py:19-21` 双重计入风险）。
+- P2：`ns_to_dt` 截断纳秒到微秒（`timeframe.py:137-138`）破坏半开区间 T-1ns 边界。
+
+**04 指标/ZigZag（TASK-030）**
+- 指标层无无效输入清零重累计：`atr.py:77-78`/`sma.py:57-68` 不校验 close∈[low,high]/非有限/非正，抛异常不 reset，sma 直接 append。
+- `detector.py:273-284` 不校验 Bar 有效性、无时间倒序/重复/配置热切换检测。
+- SwingPoint 缺 config_version（`swing.py:65` 恒 None）；sequence 校验 `>=0` 与「从 1 开始」矛盾；direction 用枚举；时间字段 `*_ns:int` 非 datetime。
+- `initial_direction=SEEK_HIGH/LOW`（`detector.py:121`）跳过暖机探索、首根即建候选；`test_zigzag.py:20-22,106` 依赖此捷径。
+- 用 DATA_GAP 替代 RESET_WARMUP、不产断点事件；ATR 种子首根 H-L 写死 `atr.py:92-93`（属 OD-07）。
+
+**05 Swing/保护点（TASK-031）**
+- 统一失效映射（1MONTH→UNKNOWN、1W/1D/4H/1H→TRANSITION）完全缺失。
+- 保护点快照契约缺失 + `NStructure` 非 frozen 原地变更（`n_structure.py:113-137`）；`ProtectedLevels` 缺 protection_id/direction/timeframe/confirmed_at/effective_at/source_structure_id/source_bar_id/protection_version/config_version/state/invalidated_at 等。
+- 空头 N 结构整体缺失（`n_structure.py:350-356` 仅多头）。
+- PullbackOriginLow 缺失。
+- `n_structure.py:358` 用 occurred_at_ns 非 confirmed_at 排序。
+
+**06 Zone（TASK-032）——本轮已修**
+- 已修：max_cluster_width_atr 默认 1.0→0.5（§6.11）；启动校验严格化（merge/max_cluster/half_width/min_ticks 严格>0、test_tol/break_buffer>=0、merge<=max_cluster 无条件）；`_apply_geometry` 只比较 center/lower/upper（纯 ATR 不空转增版）；TESTED 自循环版本递增移除；`ZoneSnapshot` 补 anchor_ids/anchor_prices/center/half_width/lower/upper 显式字段。
+- 遗留：`configs/strategy_v1_4_8.yaml:43` `max_cluster_width_atr: 1.0` 未改（§6.11 推荐 0.5，RESEARCH + 治理，非 TASK-032 允许路径）；OD-ZONE-01..06 与 max_half_width_atr 生产值待裁决。
+
+**14 成本（TASK-034/035）**
+- Maker/Taker 判定链缺失：`FillCost` 只有 liquidity_role（`costs.py:337`），无 order_type/post_only/liquidity_flag；配置仍单一 maker/taker 标量（`models.py:399-406`、`validation.py:157-160`）。
+- FX 换算机制缺失（无 FX 函数、fx_rate 裸标量、缺失/时点不匹配无门禁）。
+- 审计版本字段缺失（execution_model_version/parameter_hash/source_data_hash）。
+- 配置层元数据过薄（InstrumentMetadata 缺 ctValCcy/币种/min_notional/精度/source/captured_at/valid 区间）。
+- Funding 符号一致性未核验；`lifecycle/models.py:316-324` current_risk_per_unit 与 `costs.py:579-620` 冲突。
 
 ## 一、总体原则
 
@@ -1099,3 +1232,17 @@ OD-03 的重试上限、退避与人工接管门槛未确认前，不得把这�
 SACW 7.2 的 Macro-F1 / Per-State Recall / 转换时间误差验收、B03b、B01b 的分类与
 差异定位、B01a 的比较读持久化事件。当前是否完成均须按第 〇 节、任务台账和新证据重核。
 
+
+## Zone 1H 审计后的实施顺序（TASK-098，2026-11-24）
+
+依据 SPEC-V148-06 §6.2–6.9/6.11，当前Zone仍有原子处理顺序、历史回画、硬上限及动态生命周期缺口。历史450项通过只证明当时测试集通过，新增断言均待执行。任务状态以tasks.json为准。
+
+| 顺序 | 任务 | 交付与验证 |
+| --- | --- | --- |
+| 1 | TASK-032 | 从正常TimeframeEngine入口按旧边界突破→未突破时清理/新锚点归属/几何→测试→原子发布处理；配置硬上限、独立整体寿命、逐Bar ATR重算及不可变版本快照。覆盖同Bar突破与新增锚点/到期冲突、无效ATR、幂等和精确边界。 |
+| 2 | TASK-099 | 将版本快照转换为按有效时间分段的历史图表载荷；后续边界不得回画至created_at，as_of不得读取未来版本，终态正确截断。 |
+| 3 | TASK-100 | 消费真实历史分段；CREATED显式显示候选与锚点数，与ACTIVE/TESTED视觉和文本区分；实际浏览器验证回放、时区及窗口裁剪。 |
+
+2026-11-19T22:00:00Z创建的1H红色区域0393仅含1782.34一个锚点，为CREATED。绿色0392与0395分别仅含1766.03、1647.12一个锚点。此为本地回放观察，绿色目标尚未由用户确认。回归应冻结最小输入夹具及预期状态，真实数据复核记录数据hash，不能依赖会随历史数据变化的Zone序号。22:00 UTC对应次日06:00 UTC+8。
+
+保留CREATED候选符合§6.8，不因单锚点或被价格穿越而擅自删除、激活或改为BROKEN。max_half_width_atr仍须显式配置，缺失时禁止启用完整修订算法；工程测试可用显式夹具验证公式，生产值与候选审批继续受TASK-095及OD-ZONE约束。该未决值不阻断固定夹具的时序、版本载荷和候选展示开发。Setup/Signal联动沿既有任务实施，本次新增图表任务不增加交易行为。

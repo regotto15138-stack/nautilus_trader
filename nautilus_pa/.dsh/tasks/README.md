@@ -43,6 +43,21 @@ TASK-015 增补规则见 [原子任务与增量追溯规则](ATOMIC_TASK_RULES.m
 
 ## 3. 粒度参考
 
+### 变更控制层（TASK-103）
+
+新任务必须填写 `spec_id`、`change_level`、`change_policy`、`impact_analysis`、`approval`、
+`dependency_policy`、`on_scope_violation`；完整定义及审批流程见
+[架构保护契约](../../docs/architecture/ARCHITECTURE_CONTRACT.md)。
+`new` 默认 L1、全部特权 false、批准/分析为空，只能生成待补齐 DRAFT；
+缺真实人工授权不得进入 READY/IN_PROGRESS 或 dispatch。L0 只授权文档与 Main 任务台账同步。
+L2/L3 必须单独人工审批；L3 仍须明确具体文件及兼容性测试。
+保留旧任务历史不补造批准；旧记录通过结构校验不代表可以再次执行。
+`set-status --force` 只可绕过状态边，不能绕过开工授权检查。
+
+下发应保留台账全部增量边界，不得用 `--interfaces` 扩大契约。
+越界/架构冲突返回 BLOCK_AND_REPORT，Main 置 BLOCKED 并登记变更请求。
+Diff 检查及 CI 接入命令见架构保护契约；本地检查通过不代表远程合并保护已经启用。
+
 | 类型 | 例子 | 复杂度 |
 | --- | --- | --- |
 | 单点修复 | 修正 PATCH 乐观锁校验 | S |
